@@ -134,16 +134,27 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
             <div className="flex items-center justify-between">
               <span className="font-bold text-white text-xs flex items-center space-x-1.5">
                 <Key className="w-4 h-4 text-amber-400" />
-                <span>Google Gemini API Key (Speech-to-Text)</span>
+                <span>Voice AI API Key (Groq Whisper / Gemini)</span>
               </span>
-              <a
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] text-amber-400 underline hover:text-amber-300"
-              >
-                Get Free Key
-              </a>
+              <div className="flex items-center space-x-2 text-[10px]">
+                <a
+                  href="https://console.groq.com/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-cyan-400 underline hover:text-cyan-300 font-semibold"
+                >
+                  Groq Key (Fastest)
+                </a>
+                <span className="text-neutral-600">•</span>
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-amber-400 underline hover:text-amber-300"
+                >
+                  Google Key
+                </a>
+              </div>
             </div>
 
             <div className="flex items-center space-x-2">
@@ -151,7 +162,7 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
                 type="text"
                 value={apiKeyInput}
                 onChange={e => setApiKeyInput(e.target.value)}
-                placeholder="AIzaSy... (from aistudio.google.com)"
+                placeholder="gsk_... (Groq Whisper) or AIzaSy... (Gemini)"
                 className="flex-1 bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400 font-mono"
               />
               <button
@@ -176,7 +187,7 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
               </div>
             )}
             <p className="text-[10px] text-neutral-400">
-              API key is stored locally on this device. If Google blocks a leaked key, paste a fresh key from Google AI Studio here.
+              API key is stored locally on this device. Groq Whisper (gsk_...) delivers ultra-fast 200ms speech recognition.
             </p>
           </div>
 

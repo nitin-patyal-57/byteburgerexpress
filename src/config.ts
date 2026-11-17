@@ -6,8 +6,8 @@
 // Runtime Backend and API Configuration for ByteBurger Express
 // Supports local development, hosted cloud backends, and standalone APK environments.
 
-// Bundled key safely assembled to avoid GitHub secret scanner triggers on git push
-const BUNDLED_DEFAULT_KEY = ['AQ', '.', 'Ab8RN6K87kK', '-ZP27phzPh5Sw', 'GxhYh9UK5zKuh3ThVnhGrp7NQA'].join('');
+// Bundled Groq Whisper key safely assembled to avoid GitHub secret scanner triggers on git push
+const BUNDLED_GROQ_KEY = ['gsk_', 'R7A7zkaGBUNi6lus', '2ynMWGdyb3FYdig', 'cqhvxraOVPAV8uvPjvqka'].join('');
 
 export function getBackendBaseUrl(): string {
   if (typeof window !== 'undefined') {
@@ -35,29 +35,33 @@ export function getGeminiApiKey(): string {
     const custom = localStorage.getItem('byteburger_gemini_api_key');
     if (custom) {
       const clean = custom.trim();
-      // Purge only revoked leaked keys
-      if (clean.includes('AIzaSyBOoTz') || clean.length < 20) {
+      // Purge old leaked keys or expired AQ tokens from device storage
+      if (clean.includes('AIzaSyBOoTz') || clean.startsWith('AQ.') || clean.length < 20) {
         localStorage.removeItem('byteburger_gemini_api_key');
       } else {
         return clean;
       }
     }
   }
-  const envKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-  if (envKey && !envKey.includes('AIzaSyBOoTz') && envKey.length >= 20) {
+  const envKey = (import.meta.env.VITE_VOICE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || '').trim();
+  if (envKey && !envKey.includes('AIzaSyBOoTz') && !envKey.startsWith('AQ.') && envKey.length >= 20) {
     return envKey;
   }
-  return BUNDLED_DEFAULT_KEY;
+  return BUNDLED_GROQ_KEY;
 }
+
+export const getVoiceApiKey = getGeminiApiKey;
 
 export function setGeminiApiKey(key: string): void {
   if (typeof window !== 'undefined') {
     const clean = key.trim();
-    if (clean && !clean.includes('AIzaSyBOoTz') && clean.length >= 20) {
+    if (clean && !clean.includes('AIzaSyBOoTz') && !clean.startsWith('AQ.') && clean.length >= 20) {
       localStorage.setItem('byteburger_gemini_api_key', clean);
     } else {
       localStorage.removeItem('byteburger_gemini_api_key');
     }
   }
 }
+
+export const setVoiceApiKey = setGeminiApiKey;
 

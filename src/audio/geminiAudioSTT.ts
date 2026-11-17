@@ -83,23 +83,159 @@ export function encodePcmToWavBase64(samples: Float32Array, inputSampleRate: num
   return btoa(binary);
 }
 
+export function encodePcmToWavBlob(samples: Float32Array, inputSampleRate: number): Blob {
+  const targetSampleRate = 16000;
+  let downsampled: Float32Array;
+
+  if (inputSampleRate === targetSampleRate) {
+    downsampled = samples;
+  } else {
+    const ratio = inputSampleRate / targetSampleRate;
+    const newLength = Math.round(samples.length / ratio);
+    downsampled = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      const origIndex = i * ratio;
+      const left = Math.floor(origIndex);
+      const right = Math.min(left + 1, samples.length - 1);
+      const frac = origIndex - left;
+      downsampled[i] = samples[left] * (1 - frac) + samples[right] * frac;
+    }
+  }
+
+  const numSamples = downsampled.length;
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+
+  function writeString(offset: number, string: string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
+  // RIFF header
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeString(8, 'WAVE');
+
+  // fmt subchunk
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, targetSampleRate, true);
+  view.setUint32(28, targetSampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+
+  // data subchunk
+  writeString(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+
+  // Write PCM 16-bit samples
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, downsampled[i]));
+    const int16 = s < 0 ? s * 0x8000 : s * 0x7fff;
+    view.setInt16(offset, int16, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+/**
+ * Ultra-fast Groq Whisper Large v3 Turbo transcription (150ms-290ms latency)
+ */
+async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise<string> {
+  const form = new FormData();
+  form.append('file', wavBlob, 'audio.wav');
+  form.append('model', 'whisper-large-v3-turbo');
+  form.append('temperature', '0');
+  form.append('response_format', 'json');
+  form.append('prompt', 'ByteBurger Express kiosk food order: Add double cheese burger, peri peri fries, coke, confirm order');
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  const startTime = Date.now();
+  const keyDisplay = apiKey.slice(0, 8) + '...' + apiKey.slice(-4);
+  apkLogger.info('GEMINI', `Sending audio to Groq Whisper LPU (Key: ${keyDisplay})...`);
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: form,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    const elapsed = Date.now() - startTime;
+
+    if (!res.ok) {
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const errJson = await res.json();
+        errDetail = errJson?.error?.message || errDetail;
+      } catch {}
+      apkLogger.error('GEMINI', `Groq Whisper HTTP ${res.status} error (${elapsed}ms): ${errDetail}`);
+      return '';
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
+    }
+
+    const data = await res.json();
+    const clean = (data?.text || '').trim().replace(/^["']|["']$/g, '');
+
+    // Filter silence artifacts common to Whisper on low volume
+    if (!clean || clean.toUpperCase() === 'THANK YOU.' || clean.toUpperCase() === 'YOU' || clean.toUpperCase() === 'THANK YOU') {
+      apkLogger.info('GEMINI', `Groq Whisper 200 OK (${elapsed}ms) -> [SILENCE / NO SPEECH]`);
+      return '';
+    }
+
+    apkLogger.success('GEMINI', `Groq Whisper 200 OK (${elapsed}ms) -> Transcribed: "${clean}"`);
+    return clean;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    const isTimeout = err?.name === 'AbortError' || String(err?.message || '').includes('aborted');
+    const msg = isTimeout ? 'Network timeout (>12s) on Groq' : (err?.message || err);
+    apkLogger.error('GEMINI', `Groq Whisper fetch network error: ${msg}`);
+    return '';
+  }
+}
+
 export async function transcribeAudioWithGemini(
   base64Wav: string,
   apiKey: string = getGeminiApiKey()
 ): Promise<string> {
   const cleanKey = (apiKey || '').trim();
   if (!cleanKey || cleanKey.length < 20 || cleanKey.includes('AIzaSyBOoTz')) {
-    apkLogger.warn('GEMINI', 'No valid Gemini API key configured. Speech cannot be sent to Google.');
+    apkLogger.warn('GEMINI', 'No valid Voice AI key configured. Speech cannot be sent.');
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('gemini_api_key_error', {
-          detail: 'Gemini API Key Required: Tap here to enter your Gemini API key in Mic Tuning.',
+          detail: 'Voice API Key Required: Tap here to enter your Groq or Gemini API key in Mic Tuning.',
         })
       );
     }
     return '';
   }
 
+  // 1. If key is Groq (starts with gsk_), convert base64Wav to Blob and use ultra-fast Groq Whisper!
+  if (cleanKey.startsWith('gsk_')) {
+    const binary = atob(base64Wav);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: 'audio/wav' });
+    return transcribeWithGroqWhisper(blob, cleanKey);
+  }
+
+  // 2. Otherwise use Google Gemini Flash
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${cleanKey}`;
   const keyDisplay = cleanKey.slice(0, 6) + '...' + cleanKey.slice(-4);
   apkLogger.info('GEMINI', `Sending audio chunk to Gemini Flash (Key: ${keyDisplay})...`);
@@ -161,7 +297,7 @@ export async function transcribeAudioWithGemini(
         if (res.status === 403 || errDetail.toLowerCase().includes('leaked')) {
           msg = 'Gemini API Key was reported as leaked/revoked. Tap to enter a new key in Mic Tuning.';
         } else if (res.status === 401) {
-          msg = 'Invalid API key (HTTP 401). Tap to enter a key starting with AIzaSy... in Mic Tuning.';
+          msg = 'Invalid API key (HTTP 401). Tap to enter a key in Mic Tuning.';
         }
         window.dispatchEvent(
           new CustomEvent('gemini_api_key_error', {
@@ -197,14 +333,43 @@ export async function transcribeAudioWithGemini(
 }
 
 /**
- * Validate a Gemini API key with a fast ping request
+ * Validate a Voice API key (Groq or Gemini) with a fast ping request
  */
 export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; message: string }> {
   const cleanKey = (apiKey || '').trim();
   if (!cleanKey || cleanKey.length < 15) {
-    return { ok: false, message: 'Invalid key length. A valid Gemini API key must be provided.' };
+    return { ok: false, message: 'Invalid key length. A valid API key must be provided.' };
   }
 
+  // 1. Groq API validation ping
+  if (cleanKey.startsWith('gsk_')) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${cleanKey}` },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        apkLogger.success('GEMINI', 'Groq Whisper API key verified successfully (HTTP 200 OK)');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
+        }
+        return { ok: true, message: '✅ Success! Groq Whisper LPU AI connection verified and active.' };
+      }
+
+      const errJson = await res.json().catch(() => ({}));
+      const msg = errJson?.error?.message || `HTTP ${res.status}`;
+      apkLogger.error('GEMINI', `Groq key test failed (${res.status}): ${msg}`);
+      return { ok: false, message: `❌ Groq validation failed (${res.status}): ${msg}` };
+    } catch (e: any) {
+      return { ok: false, message: `❌ Network connection failed to Groq: ${e?.message || e}` };
+    }
+  }
+
+  // 2. Google Gemini API validation ping
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${cleanKey}`;
 
   try {
@@ -224,7 +389,7 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
     clearTimeout(timeout);
 
     if (res.ok) {
-      apkLogger.success('GEMINI', 'API Key verification succeeded (HTTP 200 OK)');
+      apkLogger.success('GEMINI', 'Gemini API Key verification succeeded (HTTP 200 OK)');
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
       }

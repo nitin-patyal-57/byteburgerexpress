@@ -115,7 +115,7 @@ export const ApkLogsModal: React.FC<ApkLogsModalProps> = ({ isOpen, onClose }) =
               <p className="text-[11px] text-neutral-400 flex items-center space-x-2">
                 <span>Active Key: <code className="text-amber-400 font-mono">{maskedKey}</code></span>
                 <span>•</span>
-                <span>Model: <code className="text-cyan-400">gemini-flash-latest</code></span>
+                <span>Engine: <code className="text-cyan-400 font-bold">{currentKey.startsWith('gsk_') ? 'Groq Whisper LPU (Turbo)' : 'Gemini Flash'}</code></span>
               </p>
             </div>
           </div>
