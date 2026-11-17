@@ -86,8 +86,9 @@ export async function transcribeAudioWithGemini(
   base64Wav: string,
   apiKey: string = getGeminiApiKey()
 ): Promise<string> {
-  if (!apiKey || !apiKey.startsWith('AIzaSy')) {
-    console.warn('Valid Gemini API Key not configured:', apiKey);
+  const cleanKey = (apiKey || '').trim();
+  if (!cleanKey || cleanKey.length < 15) {
+    console.warn('Valid Gemini API Key not configured:', cleanKey);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('gemini_api_key_error', {
@@ -98,7 +99,7 @@ export async function transcribeAudioWithGemini(
     return '';
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${cleanKey}`;
 
   const prompt =
     'You are a speech-to-text transcriber for a fast-food ordering kiosk (ByteBurger Express) in a busy, noisy restaurant hall.\n' +
@@ -160,6 +161,10 @@ export async function transcribeAudioWithGemini(
       return '';
     }
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
+    }
+
     const data = await res.json();
     const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const clean = candidateText.trim().replace(/^["']|["']$/g, '');
@@ -180,12 +185,12 @@ export async function transcribeAudioWithGemini(
  * Validate a Gemini API key with a fast ping request
  */
 export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; message: string }> {
-  if (!apiKey || !apiKey.trim().startsWith('AIzaSy')) {
-    return { ok: false, message: 'Invalid format. A valid Gemini API key starts with AIzaSy...' };
+  const cleanKey = (apiKey || '').trim();
+  if (!cleanKey || cleanKey.length < 15) {
+    return { ok: false, message: 'Invalid key length. A valid Gemini API key must be provided.' };
   }
 
-  const cleanKey = apiKey.trim();
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${cleanKey}`;
 
   try {
     const controller = new AbortController();
@@ -204,6 +209,9 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
     clearTimeout(timeout);
 
     if (res.ok) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
+      }
       return { ok: true, message: '✅ Success! Gemini AI connection verified and active.' };
     }
 

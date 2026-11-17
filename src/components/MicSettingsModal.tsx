@@ -151,7 +151,7 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
                 type="text"
                 value={apiKeyInput}
                 onChange={e => setApiKeyInput(e.target.value)}
-                placeholder="AIzaSy..."
+                placeholder="AQ... or AIzaSy..."
                 className="flex-1 bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400 font-mono"
               />
               <button

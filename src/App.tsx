@@ -59,7 +59,7 @@ export default function App() {
   // Listen for Gemini API Key error notifications
   useEffect(() => {
     const handler = (e: any) => {
-      setApiKeyError(e.detail || 'Invalid Gemini API key');
+      setApiKeyError(e.detail ? String(e.detail) : null);
     };
     window.addEventListener('gemini_api_key_error', handler);
     return () => window.removeEventListener('gemini_api_key_error', handler);
