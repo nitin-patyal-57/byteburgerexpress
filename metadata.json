@@ -1,0 +1,6 @@
+{
+  "name": "ByteBurger Express - Gemini Live Voice Kiosk",
+  "description": "Production-grade Quick-Service Restaurant voice ordering kiosk powered by Gemini Live API, deterministic tool reducer, Hinglish/Hindi/Punjabi voice engine, and 30-scenario verification suite.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
