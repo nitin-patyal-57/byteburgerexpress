@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import confetti from 'canvas-confetti';
 import { OrderState } from '../types';
@@ -18,12 +18,14 @@ import {
 interface PaymentModalProps {
   orderState: OrderState;
   onPaymentSuccess: (kitchenToken: number, paymentMethod: string) => void;
+  onOrderComplete: () => void;
   onClose: () => void;
 }
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
   orderState,
   onPaymentSuccess,
+  onOrderComplete,
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<'UPI_QR' | 'CARD_TERMINAL' | 'CASH_COUNTER'>(
@@ -33,6 +35,17 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [secondsRemaining, setSecondsRemaining] = useState(180);
   const [paidToken, setPaidToken] = useState<number | null>(null);
+  const [autoClearSeconds, setAutoClearSeconds] = useState<number>(6);
+
+  // Snapshot receipt details so they display cleanly during completion
+  const receiptSnapshot = useRef({
+    orderId: orderState.orderId,
+    orderType: orderState.orderType,
+    itemCount: orderState.itemCount,
+    subtotalPaise: orderState.subtotalPaise,
+    gstTaxPaise: orderState.gstTaxPaise,
+    totalAmountPaise: orderState.totalAmountPaise,
+  });
 
   const totalInr = (orderState.totalAmountPaise / 100).toFixed(2);
   const upiIntentUri = `upi://pay?pa=byteburger.kiosk@icici&pn=ByteBurgerQSR&am=${totalInr}&cu=INR&tr=${orderState.orderId}`;
@@ -66,6 +79,22 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     return () => clearInterval(interval);
   }, [paidToken]);
 
+  // Automatic post-payment auto-clear timer (wipes previous order for next customer)
+  useEffect(() => {
+    if (!paidToken) return;
+    const timer = setInterval(() => {
+      setAutoClearSeconds(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          onOrderComplete();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [paidToken, onOrderComplete]);
+
   const handleSimulatePayment = (method: string) => {
     setIsProcessing(true);
     setTimeout(() => {
@@ -97,10 +126,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
               Payment Gateway
             </span>
-            <h2 className="text-base sm:text-xl font-black text-white mt-0.5 sm:mt-1">Select Payment Method</h2>
+            <h2 className="text-base sm:text-xl font-black text-white mt-0.5 sm:mt-1">
+              {paidToken ? 'Order Confirmed & Placed' : 'Select Payment Method'}
+            </h2>
           </div>
           <button
-            onClick={onClose}
+            onClick={paidToken ? onOrderComplete : onClose}
             className="p-1.5 sm:p-2 rounded-full bg-neutral-800 text-neutral-400 hover:text-white transition"
           >
             <X className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -122,23 +153,23 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 Kitchen Token #{paidToken}
               </h3>
               <p className="text-xs text-neutral-400 mt-1 sm:mt-2">
-                Order #{orderState.orderId} • {orderState.orderType === 'TAKEAWAY' ? 'Takeaway' : 'Dine-In'}
+                Order #{receiptSnapshot.current.orderId} • {receiptSnapshot.current.orderType === 'TAKEAWAY' ? 'Takeaway' : 'Dine-In'}
               </p>
             </div>
 
             {/* Receipt Summary Card */}
             <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-3 sm:p-4 text-left space-y-1.5 sm:space-y-2 text-xs">
               <div className="flex justify-between text-neutral-400">
-                <span>Items ({orderState.itemCount} units)</span>
-                <span className="text-white font-medium">₹{orderState.subtotalPaise / 100}</span>
+                <span>Items ({receiptSnapshot.current.itemCount} units)</span>
+                <span className="text-white font-medium">₹{receiptSnapshot.current.subtotalPaise / 100}</span>
               </div>
               <div className="flex justify-between text-neutral-400">
                 <span>GST (5%)</span>
-                <span className="text-white font-medium">₹{orderState.gstTaxPaise / 100}</span>
+                <span className="text-white font-medium">₹{receiptSnapshot.current.gstTaxPaise / 100}</span>
               </div>
               <div className="pt-2 border-t border-neutral-800 flex justify-between font-bold text-white text-xs sm:text-sm">
                 <span>Total Paid</span>
-                <span className="text-amber-400">₹{orderState.totalAmountPaise / 100}</span>
+                <span className="text-amber-400">₹{receiptSnapshot.current.totalAmountPaise / 100}</span>
               </div>
             </div>
 
@@ -147,10 +178,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             </p>
 
             <button
-              onClick={onClose}
-              className="w-full py-3 sm:py-4 rounded-xl sm:rounded-2xl bg-amber-500 text-neutral-950 font-extrabold text-xs sm:text-sm hover:bg-amber-400 transition shadow-lg shadow-amber-500/20"
+              onClick={onOrderComplete}
+              className="w-full py-3 sm:py-4 rounded-xl sm:rounded-2xl bg-amber-500 text-neutral-950 font-extrabold text-xs sm:text-sm hover:bg-amber-400 transition shadow-lg shadow-amber-500/20 flex items-center justify-center space-x-2"
             >
-              Start Next Customer Order
+              <span>Start Next Customer Order</span>
+              <span className="text-[11px] bg-neutral-950/20 px-2.5 py-0.5 rounded-full font-bold">
+                Auto-clearing in {autoClearSeconds}s
+              </span>
             </button>
           </div>
         ) : (

@@ -467,6 +467,33 @@ export default function App() {
     }
   };
 
+  /**
+   * Complete payment cycle and automatically clear previous customer's cart for the next customer
+   */
+  const handleOrderCompleteAndClear = () => {
+    setShowPaymentModal(false);
+    // 1. Reset order store completely to a blank tray
+    globalOrderStore.dispatch({ type: 'RESET_ORDER' });
+    // 2. Clear transcripts and interim text
+    setTranscripts([]);
+    setInterimTranscript('');
+    // 3. Reset visual category and dietary filters
+    setSelectedCategory('All');
+    setVegFilter('ALL');
+    setSearchQuery('');
+    setActiveFilterNotice(null);
+    setStaffSummonsReason(null);
+    setShowMobileCart(false);
+    resetInactivityTimer();
+
+    // 4. Voice greeting welcoming next customer & auto-resume microphone
+    globalAudioManager.speak('Thank you! Welcome, what would you like to order today?', () => {
+      if (isMicActiveRef.current) {
+        globalAudioManager.resumeListening(0);
+      }
+    });
+  };
+
   return (
     <div
       className="flex flex-col h-[100dvh] w-screen bg-neutral-950 text-neutral-100 overflow-hidden font-['Plus_Jakarta_Sans',sans-serif]"
@@ -615,6 +642,7 @@ export default function App() {
         <PaymentModal
           orderState={orderState}
           onPaymentSuccess={handlePaymentSuccess}
+          onOrderComplete={handleOrderCompleteAndClear}
           onClose={() => setShowPaymentModal(false)}
         />
       )}
