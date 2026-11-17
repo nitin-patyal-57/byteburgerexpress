@@ -1,5 +1,6 @@
 import { normalizeQSRSpokenUtterance } from '../core/acousticNormalizer';
 import { getBackendBaseUrl } from '../config';
+import { apkLogger } from '../utils/apkLogger';
 import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition as CapSpeechRecognition } from '@capacitor-community/speech-recognition';
 import { TextToSpeech as CapTextToSpeech } from '@capacitor-community/text-to-speech';
@@ -339,6 +340,7 @@ export class AudioManager {
     this.lastTranscript = correctedText;
     this.lastTranscriptTime = new Date().toLocaleTimeString();
     this.logRCA('RECOGNITION_RESULT', `Final transcript (${source}): "${correctedText}"`);
+    apkLogger.success('MIC', `Final transcript recognized [${source}]: "${correctedText}"`);
 
     if (this.onTranscriptCallback) {
       this.onTranscriptCallback(correctedText, true);

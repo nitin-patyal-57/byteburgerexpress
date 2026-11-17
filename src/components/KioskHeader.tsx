@@ -27,6 +27,7 @@ interface KioskHeaderProps {
   onOpenTestRunner: () => void;
   onOpenVoiceRCA: () => void;
   onOpenMicSettings: () => void;
+  onOpenApkLogs?: () => void;
   detectedLanguage?: string;
   hasAllergyAlert?: boolean;
 }
@@ -41,6 +42,7 @@ export const KioskHeader: React.FC<KioskHeaderProps> = ({
   onOpenTestRunner,
   onOpenVoiceRCA,
   onOpenMicSettings,
+  onOpenApkLogs,
   detectedLanguage = 'Hinglish / English',
   hasAllergyAlert = false,
 }) => {
@@ -338,6 +340,18 @@ export const KioskHeader: React.FC<KioskHeaderProps> = ({
           <Sliders className="w-3 h-3 text-emerald-400 shrink-0" />
           <span>Mic Tuning</span>
         </button>
+
+        {/* APK Logs & Diagnostics Button */}
+        {onOpenApkLogs && (
+          <button
+            onClick={onOpenApkLogs}
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-cyan-600/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30 transition text-[11px] sm:text-xs font-bold shadow-sm whitespace-nowrap shrink-0"
+            title="View Live APK Diagnostics & Error Logs"
+          >
+            <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span>Logs</span>
+          </button>
+        )}
 
         {/* Voice RCA Diagnostics Button */}
         <button

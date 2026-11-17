@@ -32,6 +32,8 @@ import { AdminPinDialog } from './components/AdminPinDialog';
 import { VoiceQuickPrompts } from './components/VoiceQuickPrompts';
 import { VoiceRCAModal } from './components/VoiceRCAModal';
 import { MicSettingsModal } from './components/MicSettingsModal';
+import { ApkLogsModal } from './components/ApkLogsModal';
+import { apkLogger } from './utils/apkLogger';
 import { ShoppingBag, CheckCircle2, ChevronUp, ShieldAlert } from 'lucide-react';
 
 export default function App() {
@@ -53,6 +55,7 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
   const [showVoiceRCA, setShowVoiceRCA] = useState<boolean>(false);
   const [showMicSettings, setShowMicSettings] = useState<boolean>(false);
+  const [showApkLogs, setShowApkLogs] = useState<boolean>(false);
   const [showMobileCart, setShowMobileCart] = useState<boolean>(false);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [tapToSpeakSeconds, setTapToSpeakSeconds] = useState<number | null>(null);
@@ -203,6 +206,7 @@ export default function App() {
       for (const tc of toolCalls) {
         const result = await toolEngineRef.current.execute(tc.name, tc.args);
         tc.result = result;
+        apkLogger.success('CART', `Action executed: ${tc.name}`, tc.args);
 
         if (tc.name === 'call_staff') {
           setStaffSummonsReason(tc.args.reason || 'Customer allergen inquiry');
@@ -485,6 +489,7 @@ export default function App() {
     setShowPaymentModal(false);
     // 1. Reset order store completely to a blank tray
     globalOrderStore.dispatch({ type: 'RESET_ORDER' });
+    apkLogger.info('CART', 'Order payment completed. Tray automatically cleared for next customer.');
     // 2. Clear transcripts and interim text
     setTranscripts([]);
     setInterimTranscript('');
@@ -534,6 +539,7 @@ export default function App() {
         onOpenTestRunner={() => setShowTestRunner(true)}
         onOpenVoiceRCA={() => setShowVoiceRCA(true)}
         onOpenMicSettings={() => setShowMicSettings(true)}
+        onOpenApkLogs={() => setShowApkLogs(true)}
         hasAllergyAlert={!!staffSummonsReason}
       />
 
@@ -737,6 +743,12 @@ export default function App() {
       <MicSettingsModal
         isOpen={showMicSettings}
         onClose={() => setShowMicSettings(false)}
+      />
+
+      {/* APK Live Diagnostics & Error Logs Modal */}
+      <ApkLogsModal
+        isOpen={showApkLogs}
+        onClose={() => setShowApkLogs(false)}
       />
 
       {/* Voice RCA & Health Diagnostics Modal */}

@@ -6,6 +6,7 @@
  */
 
 import { getGeminiApiKey } from '../config';
+import { apkLogger } from '../utils/apkLogger';
 import {
   MicFilterConfig,
   getStoredMicFilterConfig,
@@ -87,19 +88,21 @@ export async function transcribeAudioWithGemini(
   apiKey: string = getGeminiApiKey()
 ): Promise<string> {
   const cleanKey = (apiKey || '').trim();
-  if (!cleanKey || cleanKey.length < 25 || cleanKey.startsWith('AQ.') || cleanKey.includes('AIzaSyBOoTz')) {
-    console.warn('Valid Gemini API Key not configured:', cleanKey);
+  if (!cleanKey || cleanKey.length < 20 || cleanKey.includes('AIzaSyBOoTz')) {
+    apkLogger.warn('GEMINI', 'No valid Gemini API key configured. Speech cannot be sent to Google.');
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('gemini_api_key_error', {
-          detail: 'Gemini API Key Required: Tap here to enter your free Google Gemini API key in Mic Tuning.',
+          detail: 'Gemini API Key Required: Tap here to enter your Gemini API key in Mic Tuning.',
         })
       );
     }
     return '';
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${cleanKey}`;
+  const keyDisplay = cleanKey.slice(0, 6) + '...' + cleanKey.slice(-4);
+  apkLogger.info('GEMINI', `Sending audio chunk to Gemini Flash (Key: ${keyDisplay})...`);
 
   const prompt =
     'You are a speech-to-text transcriber for a fast-food ordering kiosk (ByteBurger Express) in a busy, noisy restaurant hall.\n' +
@@ -132,6 +135,7 @@ export async function transcribeAudioWithGemini(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 6500);
+  const startTime = Date.now();
 
   try {
     const res = await fetch(endpoint, {
@@ -142,14 +146,15 @@ export async function transcribeAudioWithGemini(
     });
 
     clearTimeout(timeoutId);
+    const elapsed = Date.now() - startTime;
 
     if (!res.ok) {
       let errDetail = `HTTP ${res.status}`;
       try {
         const errJson = JSON.parse(await res.text());
         errDetail = errJson?.error?.message || errDetail;
-      } catch {}
-      console.warn('Gemini audio transcription HTTP error:', res.status, errDetail);
+      } catch { }
+      apkLogger.error('GEMINI', `Gemini HTTP ${res.status} error (${elapsed}ms): ${errDetail}`);
 
       if (typeof window !== 'undefined') {
         let msg = errDetail;
@@ -176,13 +181,15 @@ export async function transcribeAudioWithGemini(
     const clean = candidateText.trim().replace(/^["']|["']$/g, '');
 
     if (!clean || clean.toUpperCase() === 'SILENCE' || clean.toLowerCase().includes('silence')) {
+      apkLogger.info('GEMINI', `HTTP 200 OK (${elapsed}ms) -> [SILENCE / NO SPEECH]`);
       return '';
     }
 
+    apkLogger.success('GEMINI', `HTTP 200 OK (${elapsed}ms) -> Transcribed: "${clean}"`);
     return clean;
   } catch (err: any) {
     clearTimeout(timeoutId);
-    console.warn('Gemini audio transcription fetch failed:', err?.message || err);
+    apkLogger.error('GEMINI', `Gemini fetch network error: ${err?.message || err}`);
     return '';
   }
 }
@@ -196,7 +203,7 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
     return { ok: false, message: 'Invalid key length. A valid Gemini API key must be provided.' };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${cleanKey}`;
 
   try {
     const controller = new AbortController();
@@ -215,6 +222,7 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
     clearTimeout(timeout);
 
     if (res.ok) {
+      apkLogger.success('GEMINI', 'API Key verification succeeded (HTTP 200 OK)');
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
       }
@@ -223,11 +231,11 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
 
     const errJson = await res.json().catch(() => ({}));
     const msg = errJson?.error?.message || `HTTP ${res.status}`;
+    apkLogger.error('GEMINI', `API Key test failed (${res.status}): ${msg}`);
     if (res.status === 401) {
       return {
         ok: false,
-        message:
-          '❌ Invalid API key (HTTP 401). Please create a free Gemini API key starting with "AIzaSy..." at https://aistudio.google.com/app/apikey (Keys starting with "AQ." are unauthorized Cloud tokens).',
+        message: '❌ Invalid API key (HTTP 401). Please check that your key is active and correctly formatted.',
       };
     }
     if (res.status === 403) {
@@ -653,7 +661,7 @@ export class GeminiCloudAudioRecognizer {
       this.highpassFilter = null;
       this.lowpassFilter = null;
       this.peakingFilter = null;
-    } catch {}
+    } catch { }
 
     if (this.unsubscribeFilter) {
       this.unsubscribeFilter();
