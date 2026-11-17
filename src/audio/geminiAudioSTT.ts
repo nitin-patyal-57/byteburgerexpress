@@ -134,7 +134,7 @@ export async function transcribeAudioWithGemini(
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6500);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   const startTime = Date.now();
 
   try {
@@ -189,7 +189,9 @@ export async function transcribeAudioWithGemini(
     return clean;
   } catch (err: any) {
     clearTimeout(timeoutId);
-    apkLogger.error('GEMINI', `Gemini fetch network error: ${err?.message || err}`);
+    const isTimeout = err?.name === 'AbortError' || String(err?.message || '').includes('aborted');
+    const msg = isTimeout ? 'Network timeout: Request took > 15s. Check kiosk WiFi speed.' : (err?.message || err);
+    apkLogger.error('GEMINI', `Gemini fetch network error: ${msg}`);
     return '';
   }
 }
