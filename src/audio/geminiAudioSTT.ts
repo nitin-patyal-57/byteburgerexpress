@@ -99,7 +99,7 @@ export async function transcribeAudioWithGemini(
     return '';
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${cleanKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
 
   const prompt =
     'You are a speech-to-text transcriber for a fast-food ordering kiosk (ByteBurger Express) in a busy, noisy restaurant hall.\n' +
@@ -190,7 +190,7 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
     return { ok: false, message: 'Invalid key length. A valid Gemini API key must be provided.' };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${cleanKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
 
   try {
     const controller = new AbortController();
@@ -217,6 +217,13 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
 
     const errJson = await res.json().catch(() => ({}));
     const msg = errJson?.error?.message || `HTTP ${res.status}`;
+    if (res.status === 401) {
+      return {
+        ok: false,
+        message:
+          '❌ Invalid API key (HTTP 401). Please create a free Gemini API key starting with "AIzaSy..." at https://aistudio.google.com/app/apikey (Keys starting with "AQ." are unauthorized Cloud tokens).',
+      };
+    }
     if (res.status === 403) {
       return { ok: false, message: `❌ Key blocked by Google: ${msg}. Please create a fresh key at aistudio.google.com` };
     }
@@ -246,6 +253,7 @@ export class GeminiCloudAudioRecognizer {
   private isTranscribing = false;
 
   private pcmChunks: Float32Array[] = [];
+  private preRollBuffer: Float32Array[] = []; // Rolling buffer to preserve the first words (~340ms)
   private speechDetected = false;
   private silenceTimer: any = null;
   private speechStartTime = 0;
@@ -377,7 +385,13 @@ export class GeminiCloudAudioRecognizer {
         const inputData = e.inputBuffer.getChannelData(0);
         const frame = new Float32Array(inputData);
 
-        // Compute true RMS energy of the frame (ignores single hall clicks/spoon drops)
+        // Keep last 4 rolling audio frames (~340ms) so the start of words ("Add", "One", "Bhai") is never chopped off
+        this.preRollBuffer.push(frame);
+        if (this.preRollBuffer.length > 4) {
+          this.preRollBuffer.shift();
+        }
+
+        // Compute true RMS energy of the frame
         let sumSq = 0;
         for (let i = 0; i < inputData.length; i++) {
           sumSq += inputData[i] * inputData[i];
@@ -388,18 +402,20 @@ export class GeminiCloudAudioRecognizer {
 
         // Dynamically track ambient hall noise floor when not speaking
         if (!this.speechDetected) {
-          this.ambientNoiseFloor = this.ambientNoiseFloor * 0.94 + volPercent * 0.06;
+          this.ambientNoiseFloor = this.ambientNoiseFloor * 0.95 + volPercent * 0.05;
         }
 
-        // Adaptive Noise Gate: must exceed user threshold AND must rise above the ambient hall noise!
+        // Adaptive Noise Gate: must exceed user threshold and ambient floor (capped at 7.5% so customer voice is never drowned)
         const gate = this.filterConfig.noiseGateThreshold;
-        const effectiveGate = Math.max(gate, this.ambientNoiseFloor + 3.0);
+        const effectiveGate = Math.max(gate, Math.min(this.ambientNoiseFloor + 1.2, 7.5));
         const IS_SPEECH = volPercent >= effectiveGate;
 
         if (IS_SPEECH) {
           if (!this.speechDetected) {
             this.speechDetected = true;
             this.speechStartTime = Date.now();
+            // Prepend pre-roll buffer so the start of utterance is 100% captured!
+            this.pcmChunks = [...this.preRollBuffer];
             this.onInterimCallback?.('Listening to your order...');
             this.onLogCallback?.(`Speech detected (${volPercent}% >= effective gate ${effectiveGate.toFixed(1)}%) — recording`);
           }
@@ -411,16 +427,16 @@ export class GeminiCloudAudioRecognizer {
 
           this.pcmChunks.push(frame);
 
-          // Hard ceiling: commit after 3 seconds of continuous speech (prevents recording endless hall noise)
-          if (Date.now() - this.speechStartTime > 3000) {
+          // Hard ceiling: commit after 3.8 seconds of continuous speech
+          if (Date.now() - this.speechStartTime > 3800) {
             this.commitUtterance();
           }
         } else if (this.speechDetected) {
           this.pcmChunks.push(frame);
 
           if (!this.silenceTimer) {
-            // User-set silence timeout (default 350ms - 400ms for rapid response)
-            const silenceWaitMs = Math.max(250, this.filterConfig.silenceCutoffMs || 400);
+            // Natural speech pause timeout (default 650ms)
+            const silenceWaitMs = Math.max(400, this.filterConfig.silenceCutoffMs || 650);
             this.silenceTimer = setTimeout(() => {
               this.commitUtterance();
             }, silenceWaitMs);
@@ -467,13 +483,14 @@ export class GeminiCloudAudioRecognizer {
 
       // Reset chunks for next utterance immediately
       this.pcmChunks = [];
+      this.preRollBuffer = [];
       this.speechDetected = false;
 
       const sampleRate = this.audioCtx?.sampleRate || 48000;
       const durationSec = (totalLength / sampleRate).toFixed(1);
 
-      // Minimum 0.3s speech duration to filter out accidental clicks
-      if (totalLength < sampleRate * 0.3) {
+      // Minimum 0.25s speech duration to filter out accidental clicks
+      if (totalLength < sampleRate * 0.25) {
         this.isTranscribing = false;
         this.onInterimCallback?.('');
         if (this.isListening && !this.isSpeaking) {
@@ -482,7 +499,7 @@ export class GeminiCloudAudioRecognizer {
         return;
       }
 
-      this.onLogCallback?.(`Sending ${durationSec}s audio to Gemini 3.5...`);
+      this.onLogCallback?.(`Sending ${durationSec}s audio to Gemini 1.5 Flash...`);
 
       // Encode to standard 16kHz mono WAV base64
       const base64Wav = encodePcmToWavBase64(merged, sampleRate);
@@ -541,6 +558,7 @@ export class GeminiCloudAudioRecognizer {
     this.isSpeaking = true;
     this.speechDetected = false;
     this.pcmChunks = [];
+    this.preRollBuffer = [];
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer);
       this.silenceTimer = null;
@@ -551,6 +569,7 @@ export class GeminiCloudAudioRecognizer {
     this.isSpeaking = false;
     this.speechDetected = false;
     this.pcmChunks = [];
+    this.preRollBuffer = [];
     if (this.isListening && !this.isTranscribing) {
       this.onStateCallback?.('LISTENING');
     }
@@ -562,6 +581,7 @@ export class GeminiCloudAudioRecognizer {
     this.isTranscribing = false;
     this.speechDetected = false;
     this.pcmChunks = [];
+    this.preRollBuffer = [];
 
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer);

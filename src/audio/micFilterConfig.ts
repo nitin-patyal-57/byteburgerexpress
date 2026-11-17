@@ -22,29 +22,29 @@ export interface MicFilterConfig {
 export const MIC_FILTER_PRESETS: Record<Exclude<MicFilterPreset, 'CUSTOM'>, MicFilterConfig> = {
   NEAR_FIELD_FOCUS: {
     preset: 'NEAR_FIELD_FOCUS',
-    lowCutHz: 300,
-    highCutHz: 3200,
+    lowCutHz: 250,
+    highCutHz: 3400,
     voiceBoostGainDb: 4.0,
-    noiseGateThreshold: 7.5, // Direct kiosk customer only; ignores distant conversations > 60cm
-    silenceCutoffMs: 350,
+    noiseGateThreshold: 5.5, // Direct kiosk customer only; ignores distant conversations > 60cm
+    silenceCutoffMs: 650,
     filterEnabled: true,
   },
   HUMAN_VOICE: {
     preset: 'HUMAN_VOICE',
-    lowCutHz: 250,
-    highCutHz: 3400,
+    lowCutHz: 200,
+    highCutHz: 3500,
     voiceBoostGainDb: 3.0,
-    noiseGateThreshold: 5.5,
-    silenceCutoffMs: 400,
+    noiseGateThreshold: 4.5,
+    silenceCutoffMs: 650,
     filterEnabled: true,
   },
   NOISY_RESTAURANT: {
     preset: 'NOISY_RESTAURANT',
-    lowCutHz: 350,
-    highCutHz: 3000,
+    lowCutHz: 300,
+    highCutHz: 3200,
     voiceBoostGainDb: 4.5,
-    noiseGateThreshold: 8.5,
-    silenceCutoffMs: 350,
+    noiseGateThreshold: 7.0,
+    silenceCutoffMs: 600,
     filterEnabled: true,
   },
   WIDE_VOICE: {
@@ -53,7 +53,7 @@ export const MIC_FILTER_PRESETS: Record<Exclude<MicFilterPreset, 'CUSTOM'>, MicF
     highCutHz: 4500,
     voiceBoostGainDb: 1.5,
     noiseGateThreshold: 3.0,
-    silenceCutoffMs: 450,
+    silenceCutoffMs: 700,
     filterEnabled: true,
   },
 };
