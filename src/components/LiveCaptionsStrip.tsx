@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import { TranscriptEntry } from '../types';
-import { Zap, MessageSquare, Sparkles, Volume2 } from 'lucide-react';
+import { Zap, MessageSquare, Sparkles, Volume2, Mic } from 'lucide-react';
 
 interface LiveCaptionsStripProps {
   transcripts: TranscriptEntry[];
   onTriggerBargeIn: () => void;
+  onTapToSpeak?: () => void;
   isSpeaking: boolean;
   interimText?: string;
 }
@@ -12,6 +13,7 @@ interface LiveCaptionsStripProps {
 export const LiveCaptionsStrip: React.FC<LiveCaptionsStripProps> = ({
   transcripts,
   onTriggerBargeIn,
+  onTapToSpeak,
   isSpeaking,
   interimText,
 }) => {
@@ -86,18 +88,34 @@ export const LiveCaptionsStrip: React.FC<LiveCaptionsStripProps> = ({
         </div>
       </div>
 
-      {/* Barge-in Button: Demonstrates official sub-50ms hardware AudioTrack flush */}
-      {isSpeaking && (
-        <button
-          onClick={onTriggerBargeIn}
-          className="flex-shrink-0 flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-red-600/20 border border-red-500/40 text-red-300 hover:bg-red-600/30 transition text-[11px] sm:text-xs font-bold animate-pulse shadow-sm"
-          title="Simulate customer speaking over the assistant (halts playback in < 40ms)"
-        >
-          <Zap className="w-3.5 h-3.5 text-red-400 fill-current" />
-          <span className="hidden sm:inline">⚡ Barge In (&lt;50ms)</span>
-          <span className="sm:hidden">Stop</span>
-        </button>
-      )}
+      <div className="flex items-center space-x-2 shrink-0">
+        {/* Tap to Speak Button: Directly activates mic burst, immune to hall noise */}
+        {onTapToSpeak && !isSpeaking && (
+          <button
+            type="button"
+            onClick={onTapToSpeak}
+            className="flex-shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs transition shadow-md shadow-amber-500/25 active:scale-95"
+            title="Tap to speak your food order (recommended for noisy halls)"
+          >
+            <Mic className="w-3.5 h-3.5 fill-current animate-pulse" />
+            <span className="hidden sm:inline">Tap to Speak</span>
+            <span className="sm:hidden">Speak</span>
+          </button>
+        )}
+
+        {/* Barge-in Button: Demonstrates official sub-50ms hardware AudioTrack flush */}
+        {isSpeaking && (
+          <button
+            onClick={onTriggerBargeIn}
+            className="flex-shrink-0 flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-red-600/20 border border-red-500/40 text-red-300 hover:bg-red-600/30 transition text-[11px] sm:text-xs font-bold animate-pulse shadow-sm"
+            title="Simulate customer speaking over the assistant (halts playback in < 40ms)"
+          >
+            <Zap className="w-3.5 h-3.5 text-red-400 fill-current" />
+            <span className="hidden sm:inline">⚡ Barge In (&lt;50ms)</span>
+            <span className="sm:hidden">Stop</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 };

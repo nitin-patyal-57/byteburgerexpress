@@ -661,6 +661,17 @@ export class AudioManager {
     }
   }
 
+  /**
+   * Tap-to-Speak trigger:
+   * Explicitly activates mic for 3.2 seconds for direct customer speech.
+   * Completely bypasses hall noise.
+   */
+  public tapToSpeak(durationMs = 3200) {
+    if (this.geminiRecognizer) {
+      this.geminiRecognizer.startTapToSpeak(durationMs);
+    }
+  }
+
   public async startGeminiCloudRecognizer(): Promise<boolean> {
     try {
       this.isListening = true;

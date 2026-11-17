@@ -32,7 +32,7 @@ import { AdminPinDialog } from './components/AdminPinDialog';
 import { VoiceQuickPrompts } from './components/VoiceQuickPrompts';
 import { VoiceRCAModal } from './components/VoiceRCAModal';
 import { MicSettingsModal } from './components/MicSettingsModal';
-import { ShoppingBag, CheckCircle2, ChevronUp } from 'lucide-react';
+import { ShoppingBag, CheckCircle2, ChevronUp, ShieldAlert } from 'lucide-react';
 
 export default function App() {
   const [orderState, setOrderState] = useState<OrderState>(globalOrderStore.getState());
@@ -54,6 +54,16 @@ export default function App() {
   const [showVoiceRCA, setShowVoiceRCA] = useState<boolean>(false);
   const [showMicSettings, setShowMicSettings] = useState<boolean>(false);
   const [showMobileCart, setShowMobileCart] = useState<boolean>(false);
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+
+  // Listen for Gemini API Key error notifications
+  useEffect(() => {
+    const handler = (e: any) => {
+      setApiKeyError(e.detail || 'Invalid Gemini API key');
+    };
+    window.addEventListener('gemini_api_key_error', handler);
+    return () => window.removeEventListener('gemini_api_key_error', handler);
+  }, []);
 
   // Menu visual filter state (driven by voice commands or touch)
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -494,6 +504,17 @@ export default function App() {
     });
   };
 
+  /**
+   * Direct Tap-to-Speak trigger (Push-to-Talk for loud dining halls)
+   */
+  const handleTapToSpeak = async () => {
+    resetInactivityTimer();
+    if (!isMicActive) {
+      await startMic();
+    }
+    globalAudioManager.tapToSpeak(3200);
+  };
+
   return (
     <div
       className="flex flex-col h-[100dvh] w-screen bg-neutral-950 text-neutral-100 overflow-hidden font-['Plus_Jakarta_Sans',sans-serif]"
@@ -513,15 +534,28 @@ export default function App() {
         hasAllergyAlert={!!staffSummonsReason}
       />
 
+      {/* API Key Alert Banner */}
+      {apiKeyError && (
+        <div
+          onClick={() => setShowMicSettings(true)}
+          className="bg-rose-950/95 border-b border-rose-500/80 px-3 py-2 text-center text-xs font-bold text-white flex items-center justify-center space-x-2 cursor-pointer shadow-lg animate-pulse"
+        >
+          <ShieldAlert className="w-4 h-4 text-amber-300" />
+          <span>{apiKeyError}</span>
+          <span className="underline ml-2 bg-black/40 px-2 py-0.5 rounded text-[11px]">Tap to Fix in Mic Tuning</span>
+        </div>
+      )}
+
       {/* Main Kiosk Viewport: Side-by-side on all tablets/kiosks (md >= 768px), drawer on mobile */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative min-h-0">
         {/* Left Column: Menu Grid & Captions Strip */}
         <section className="w-full md:flex-1 flex flex-col h-full p-2 sm:p-3 md:p-3.5 overflow-hidden space-y-2 sm:space-y-2.5 min-w-0">
-          {/* Live Captions Strip with Barge-in Button */}
+          {/* Live Captions Strip with Barge-in & Tap to Speak */}
           <LiveCaptionsStrip
             transcripts={transcripts}
             interimText={interimTranscript}
             onTriggerBargeIn={handleTriggerBargeIn}
+            onTapToSpeak={handleTapToSpeak}
             isSpeaking={voiceState === 'SPEAKING'}
           />
 

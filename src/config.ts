@@ -3,7 +3,7 @@
  * Supports local development, hosted cloud backends, and standalone APK environments.
  */
 
-export const DEFAULT_GEMINI_API_KEY = 'AIzaSyBOoTzCAJDXr-6tUsAQSsizLanzOrpBkbc';
+export const DEFAULT_GEMINI_API_KEY = '';
 
 export function getBackendBaseUrl(): string {
   if (typeof window !== 'undefined') {

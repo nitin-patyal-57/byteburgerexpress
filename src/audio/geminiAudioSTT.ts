@@ -88,24 +88,25 @@ export async function transcribeAudioWithGemini(
 ): Promise<string> {
   if (!apiKey || !apiKey.startsWith('AIzaSy')) {
     console.warn('Valid Gemini API Key not configured:', apiKey);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('gemini_api_key_error', {
+          detail: 'No valid Gemini API key configured. Please enter your key in Mic Tuning.',
+        })
+      );
+    }
     return '';
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   const prompt =
-    'You are an intelligent AI audio filter for a fast-food ordering kiosk (ByteBurger Express).\n' +
-    'TASK: Transcribe ONLY when the speaker in the foreground is DIRECTLY ORDERING FOOD or commanding the kiosk screen.\n' +
-    'VALID KIOSK ORDERS:\n' +
-    '- "Add one double cheese burger", "two peri peri fries", "make it a meal combo"\n' +
-    '- "Coke zero and one mineral water", "extra cheese on burger"\n' +
-    '- "Confirm my order", "checkout", "UPI QR code", "pay by card", "cancel order"\n' +
-    '- "Show me burgers", "call staff", "how much is total"\n\n' +
-    'CRITICAL REJECTION RULES:\n' +
-    '1. If two or more people are talking to EACH OTHER about personal or non-restaurant topics (e.g., greetings, phone calls, laughter, casual discussion, asking where someone is, general chatting), reply with ONLY "SILENCE".\n' +
-    '2. If the audio is background crowd chatter, distant speech, hesitation sounds ("umm", "err"), or not a direct food order command, reply with ONLY "SILENCE".\n' +
-    '3. Never hallucinate food items from casual chatter.\n' +
-    'Return ONLY the customer food order phrase in English/Hinglish, or "SILENCE".';
+    'You are a speech-to-text transcriber for a fast-food ordering kiosk (ByteBurger Express) in a busy, noisy restaurant hall.\n' +
+    'The microphone captures ambient hall noise, background room reverberation, and customer speech.\n' +
+    'DIRECTIVE: Focus strictly on the primary speaker in the foreground ordering at the kiosk. Filter out all background hall chatter and room noise.\n' +
+    'Extract and transcribe ONLY their food order or kiosk command in English or Hinglish (e.g. "Add one double cheese burger", "one peri peri fries", "coke zero", "confirm order", "show burgers", "cancel").\n' +
+    'If the audio contains only background static, noise, or silence without any customer food order, reply with ONLY "SILENCE".\n' +
+    'Otherwise return ONLY the customer order phrase, without quotes or punctuation.';
 
   const body = {
     contents: [
@@ -142,8 +143,20 @@ export async function transcribeAudioWithGemini(
     clearTimeout(timeoutId);
 
     if (!res.ok) {
-      const errText = await res.text();
-      console.warn('Gemini audio transcription HTTP error:', res.status, errText);
+      let errDetail = `HTTP ${res.status}`;
+      try {
+        const errJson = JSON.parse(await res.text());
+        errDetail = errJson?.error?.message || errDetail;
+      } catch {}
+      console.warn('Gemini audio transcription HTTP error:', res.status, errDetail);
+
+      if (typeof window !== 'undefined' && (res.status === 403 || res.status === 400)) {
+        window.dispatchEvent(
+          new CustomEvent('gemini_api_key_error', {
+            detail: `Gemini API Key Error: ${errDetail}. Please update your API key in Mic Tuning or Admin.`,
+          })
+        );
+      }
       return '';
     }
 
@@ -160,6 +173,48 @@ export async function transcribeAudioWithGemini(
     clearTimeout(timeoutId);
     console.warn('Gemini audio transcription fetch failed:', err?.message || err);
     return '';
+  }
+}
+
+/**
+ * Validate a Gemini API key with a fast ping request
+ */
+export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; message: string }> {
+  if (!apiKey || !apiKey.trim().startsWith('AIzaSy')) {
+    return { ok: false, message: 'Invalid format. A valid Gemini API key starts with AIzaSy...' };
+  }
+
+  const cleanKey = apiKey.trim();
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: 'Respond with OK' }] }],
+        generationConfig: { maxOutputTokens: 5 },
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      return { ok: true, message: '✅ Success! Gemini AI connection verified and active.' };
+    }
+
+    const errJson = await res.json().catch(() => ({}));
+    const msg = errJson?.error?.message || `HTTP ${res.status}`;
+    if (res.status === 403) {
+      return { ok: false, message: `❌ Key blocked by Google: ${msg}. Please create a fresh key at aistudio.google.com` };
+    }
+    return { ok: false, message: `❌ Error (${res.status}): ${msg}` };
+  } catch (e: any) {
+    return { ok: false, message: `❌ Network connection failed: ${e?.message || e}` };
   }
 }
 
@@ -186,6 +241,7 @@ export class GeminiCloudAudioRecognizer {
   private speechDetected = false;
   private silenceTimer: any = null;
   private speechStartTime = 0;
+  private ambientNoiseFloor = 4.0;
   private monitorInterval: any = null;
 
   private onTranscriptCallback: ((text: string) => void) | null = null;
@@ -313,53 +369,53 @@ export class GeminiCloudAudioRecognizer {
         const inputData = e.inputBuffer.getChannelData(0);
         const frame = new Float32Array(inputData);
 
-        // Compute peak deviation using AnalyserNode time-domain data (100% reliable across Android hardware)
-        if (this.analyser) {
-          const timeData = new Uint8Array(this.analyser.fftSize);
-          this.analyser.getByteTimeDomainData(timeData);
+        // Compute true RMS energy of the frame (ignores single hall clicks/spoon drops)
+        let sumSq = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          sumSq += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sumSq / inputData.length);
+        const volPercent = Math.min(100, Math.round(rms * 450));
+        this.onVolumeCallback?.(volPercent);
 
-          let maxDev = 0;
-          for (let i = 0; i < timeData.length; i++) {
-            const dev = Math.abs(timeData[i] - 128);
-            if (dev > maxDev) maxDev = dev;
+        // Dynamically track ambient hall noise floor when not speaking
+        if (!this.speechDetected) {
+          this.ambientNoiseFloor = this.ambientNoiseFloor * 0.94 + volPercent * 0.06;
+        }
+
+        // Adaptive Noise Gate: must exceed user threshold AND must rise above the ambient hall noise!
+        const gate = this.filterConfig.noiseGateThreshold;
+        const effectiveGate = Math.max(gate, this.ambientNoiseFloor + 3.0);
+        const IS_SPEECH = volPercent >= effectiveGate;
+
+        if (IS_SPEECH) {
+          if (!this.speechDetected) {
+            this.speechDetected = true;
+            this.speechStartTime = Date.now();
+            this.onInterimCallback?.('Listening to your order...');
+            this.onLogCallback?.(`Speech detected (${volPercent}% >= effective gate ${effectiveGate.toFixed(1)}%) — recording`);
           }
 
-          const volPercent = Math.min(100, Math.round((maxDev / 128) * 100));
-          this.onVolumeCallback?.(volPercent);
+          if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+          }
 
-          // Noise Gate: Ignore background noise/chatter below user-set threshold
-          const gate = this.filterConfig.noiseGateThreshold;
-          const IS_SPEECH = volPercent >= gate;
+          this.pcmChunks.push(frame);
 
-          if (IS_SPEECH) {
-            if (!this.speechDetected) {
-              this.speechDetected = true;
-              this.speechStartTime = Date.now();
-              this.onInterimCallback?.('Listening to your order...');
-              this.onLogCallback?.(`Speech detected (${volPercent}% >= ${gate}%) — recording order`);
-            }
+          // Hard ceiling: commit after 3 seconds of continuous speech (prevents recording endless hall noise)
+          if (Date.now() - this.speechStartTime > 3000) {
+            this.commitUtterance();
+          }
+        } else if (this.speechDetected) {
+          this.pcmChunks.push(frame);
 
-            if (this.silenceTimer) {
-              clearTimeout(this.silenceTimer);
-              this.silenceTimer = null;
-            }
-
-            this.pcmChunks.push(frame);
-
-            // Hard ceiling: commit after 5 seconds of continuous speech
-            if (Date.now() - this.speechStartTime > 5000) {
+          if (!this.silenceTimer) {
+            // User-set silence timeout (default 350ms - 400ms for rapid response)
+            const silenceWaitMs = Math.max(250, this.filterConfig.silenceCutoffMs || 400);
+            this.silenceTimer = setTimeout(() => {
               this.commitUtterance();
-            }
-          } else if (this.speechDetected) {
-            this.pcmChunks.push(frame);
-
-            if (!this.silenceTimer) {
-              // User-set silence timeout (default 400ms for ultra-fast response!)
-              const silenceWaitMs = Math.max(250, this.filterConfig.silenceCutoffMs || 400);
-              this.silenceTimer = setTimeout(() => {
-                this.commitUtterance();
-              }, silenceWaitMs);
-            }
+            }, silenceWaitMs);
           }
         }
       };
@@ -445,6 +501,32 @@ export class GeminiCloudAudioRecognizer {
     } finally {
       this.isTranscribing = false;
     }
+  }
+
+  /**
+   * Push-to-Talk / Tap-to-Speak trigger:
+   * Explicitly opens recording for the customer right at the kiosk for 3.2 seconds.
+   * Completely immune to ambient hall chatter!
+   */
+  public startTapToSpeak(durationMs = 3200) {
+    if (this.isSpeaking || this.isTranscribing) return;
+    this.isListening = true;
+    this.speechDetected = true;
+    this.speechStartTime = Date.now();
+    this.pcmChunks = [];
+    this.onInterimCallback?.('Listening to your order... Speak now!');
+    this.onStateCallback?.('LISTENING');
+
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+
+    setTimeout(() => {
+      if (this.speechDetected && !this.isTranscribing && this.pcmChunks.length > 0) {
+        this.commitUtterance();
+      }
+    }, durationMs);
   }
 
   public pauseForSpeaking() {

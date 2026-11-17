@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Check,
   Sparkles,
+  Key,
 } from 'lucide-react';
 import {
   MicFilterConfig,
@@ -19,6 +20,8 @@ import {
   saveMicFilterConfig,
 } from '../audio/micFilterConfig';
 import { globalAudioManager } from '../audio/audioManager';
+import { getGeminiApiKey, setGeminiApiKey } from '../config';
+import { testGeminiApiKey } from '../audio/geminiAudioSTT';
 
 interface MicSettingsModalProps {
   isOpen: boolean;
@@ -30,6 +33,8 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
   const [liveVolume, setLiveVolume] = useState<number>(0);
   const [frequencyData, setFrequencyData] = useState<number[]>([]);
   const [savedNotice, setSavedNotice] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState<string>(getGeminiApiKey());
+  const [keyTestStatus, setKeyTestStatus] = useState<{ testing: boolean; message: string; ok?: boolean } | null>(null);
 
   // Poll live microphone visualizer data every 80ms while open
   useEffect(() => {
@@ -45,6 +50,16 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
   }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const handleTestKey = async () => {
+    setKeyTestStatus({ testing: true, message: 'Verifying Gemini API key with Google servers...' });
+    const res = await testGeminiApiKey(apiKeyInput);
+    setKeyTestStatus({ testing: false, message: res.message, ok: res.ok });
+    if (res.ok) {
+      setGeminiApiKey(apiKeyInput);
+      triggerSavedFeedback();
+    }
+  };
 
   const handleApplyPreset = (preset: Exclude<MicFilterPreset, 'CUSTOM'>) => {
     const updated = { ...MIC_FILTER_PRESETS[preset] };
@@ -70,7 +85,7 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
   };
 
   const handleResetDefaults = () => {
-    const def = { ...MIC_FILTER_PRESETS.HUMAN_VOICE };
+    const def = { ...MIC_FILTER_PRESETS.NEAR_FIELD_FOCUS };
     setConfig(def);
     saveMicFilterConfig(def);
     triggerSavedFeedback();
@@ -90,7 +105,7 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
             <div>
               <div className="flex items-center space-x-2">
                 <h3 className="text-sm sm:text-base font-extrabold text-white">
-                  Microphone & Acoustic Frequency Tuning
+                  Microphone & Acoustic Noise Tuning
                 </h3>
                 {savedNotice && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center space-x-1 animate-pulse">
@@ -100,7 +115,7 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
                 )}
               </div>
               <p className="text-[11px] text-neutral-400">
-                Isolate human voice frequencies & ignore background restaurant noise
+                Isolate human voice frequencies & reject background hall noise
               </p>
             </div>
           </div>
@@ -113,13 +128,64 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Content Body */}
-        <div className="p-4 sm:p-6 space-y-5 overflow-y-auto text-xs text-neutral-300">
+        <div className="p-4 sm:p-6 space-y-4 overflow-y-auto text-xs text-neutral-300">
+          {/* Section 0: Google Gemini API Key Setup & Live Verification */}
+          <div className="bg-neutral-950 p-4 rounded-2xl border border-neutral-800 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-white text-xs flex items-center space-x-1.5">
+                <Key className="w-4 h-4 text-amber-400" />
+                <span>Google Gemini API Key (Speech-to-Text)</span>
+              </span>
+              <a
+                href="https://aistudio.google.com/app/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] text-amber-400 underline hover:text-amber-300"
+              >
+                Get Free Key
+              </a>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={apiKeyInput}
+                onChange={e => setApiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="flex-1 bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400 font-mono"
+              />
+              <button
+                type="button"
+                onClick={handleTestKey}
+                disabled={keyTestStatus?.testing}
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs transition disabled:opacity-50 whitespace-nowrap shadow-md shadow-amber-500/20"
+              >
+                {keyTestStatus?.testing ? 'Testing...' : 'Test & Save'}
+              </button>
+            </div>
+
+            {keyTestStatus && (
+              <div
+                className={`text-[11px] p-2.5 rounded-xl border leading-relaxed ${
+                  keyTestStatus.ok
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                }`}
+              >
+                {keyTestStatus.message}
+              </div>
+            )}
+            <p className="text-[10px] text-neutral-400">
+              API key is stored locally on this device. If Google blocks a leaked key, paste a fresh key from Google AI Studio here.
+            </p>
+          </div>
+
           {/* Section 1: Live Voice & Gate Monitor */}
           <div className="bg-neutral-950 p-4 rounded-2xl border border-neutral-800 space-y-3">
             <div className="flex items-center justify-between">
               <span className="font-bold text-white text-xs flex items-center space-x-1.5">
                 <Activity className="w-4 h-4 text-emerald-400" />
-                <span>Live Acoustic Monitor</span>
+                <span>Live Hall Noise & Speech Monitor (RMS)</span>
               </span>
               <span
                 className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border transition-all ${
@@ -128,14 +194,14 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
                     : 'bg-neutral-800 text-neutral-400 border-neutral-700'
                 }`}
               >
-                {isSpeech ? '🟢 Human Speech Detected' : '⚪ Noise Ignored (Below Gate)'}
+                {isSpeech ? '🟢 Customer Speaking at Screen' : '⚪ Hall Noise Ignored (Below Gate)'}
               </span>
             </div>
 
             {/* Live Volume Meter with Gate Indicator */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-[10px] text-neutral-400">
-                <span>Input Level: {liveVolume}%</span>
+                <span>Microphone Level: {liveVolume}%</span>
                 <span>Gate Threshold: {config.noiseGateThreshold.toFixed(1)}%</span>
               </div>
               <div className="relative w-full h-3 bg-neutral-800 rounded-full overflow-hidden">
@@ -167,28 +233,22 @@ export const MicSettingsModal: React.FC<MicSettingsModalProps> = ({ isOpen, onCl
 
               {/* Bandpass Spectrum Visualizer */}
               <div className="h-6 w-full bg-neutral-900 rounded-xl overflow-hidden border border-neutral-800 flex text-[9px] font-bold text-center items-center">
-                {/* Sub-Bass & Rumble Rejection */}
                 <div
                   className="h-full bg-rose-950/40 border-r border-rose-500/30 text-rose-400/80 flex items-center justify-center transition-all truncate px-1"
                   style={{ width: '20%' }}
-                  title={`Sub-bass / HVAC Rumble Cut below ${config.lowCutHz}Hz`}
                 >
                   &lt;{config.lowCutHz}Hz Cut
                 </div>
 
-                {/* Human Voice Passband */}
                 <div
                   className="h-full bg-emerald-950/60 text-emerald-300 border-r border-emerald-500/40 flex items-center justify-center transition-all flex-1 px-1 font-extrabold"
-                  title="Active Human Voice Band (300Hz - 3400Hz)"
                 >
-                  🗣️ Human Voice Passband ({config.lowCutHz}Hz - {config.highCutHz}Hz)
+                  🗣️ Human Voice ({config.lowCutHz}Hz - {config.highCutHz}Hz)
                 </div>
 
-                {/* High Fryer / Sizzle Rejection */}
                 <div
                   className="h-full bg-rose-950/40 text-rose-400/80 flex items-center justify-center transition-all truncate px-1"
                   style={{ width: '22%' }}
-                  title={`Fryer Sizzle / Clatter Cut above ${config.highCutHz}Hz`}
                 >
                   &gt;{config.highCutHz}Hz Cut
                 </div>
