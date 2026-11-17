@@ -6,6 +6,7 @@ interface LiveCaptionsStripProps {
   transcripts: TranscriptEntry[];
   onTriggerBargeIn: () => void;
   onTapToSpeak?: () => void;
+  tapToSpeakCountdown?: number | null;
   isSpeaking: boolean;
   interimText?: string;
 }
@@ -14,6 +15,7 @@ export const LiveCaptionsStrip: React.FC<LiveCaptionsStripProps> = ({
   transcripts,
   onTriggerBargeIn,
   onTapToSpeak,
+  tapToSpeakCountdown = null,
   isSpeaking,
   interimText,
 }) => {
@@ -89,17 +91,28 @@ export const LiveCaptionsStrip: React.FC<LiveCaptionsStripProps> = ({
       </div>
 
       <div className="flex items-center space-x-2 shrink-0">
-        {/* Tap to Speak Button: Directly activates mic burst, immune to hall noise */}
+        {/* Tap to Speak Button: Directly activates mic 5-second chunk with countdown & clear break */}
         {onTapToSpeak && !isSpeaking && (
           <button
             type="button"
             onClick={onTapToSpeak}
-            className="flex-shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs transition shadow-md shadow-amber-500/25 active:scale-95"
-            title="Tap to speak your food order (recommended for noisy halls)"
+            disabled={tapToSpeakCountdown !== null}
+            className={`flex-shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-xl font-black text-xs transition active:scale-95 ${
+              tapToSpeakCountdown !== null
+                ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/40 border border-rose-400 animate-pulse'
+                : 'bg-amber-500 hover:bg-amber-400 text-neutral-950 shadow-md shadow-amber-500/25'
+            }`}
+            title="Tap to speak your food order (5-second chunk with break)"
           >
             <Mic className="w-3.5 h-3.5 fill-current animate-pulse" />
-            <span className="hidden sm:inline">Tap to Speak</span>
-            <span className="sm:hidden">Speak</span>
+            {tapToSpeakCountdown !== null ? (
+              <span>🔴 Recording: {tapToSpeakCountdown}s</span>
+            ) : (
+              <>
+                <span className="hidden sm:inline">Tap to Speak (5s)</span>
+                <span className="sm:hidden">Speak 5s</span>
+              </>
+            )}
           </button>
         )}
 

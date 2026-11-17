@@ -663,12 +663,12 @@ export class AudioManager {
 
   /**
    * Tap-to-Speak trigger:
-   * Explicitly activates mic for 3.2 seconds for direct customer speech.
+   * Explicitly activates mic for 5.0 seconds for direct customer speech with clear countdown and break.
    * Completely bypasses hall noise.
    */
-  public tapToSpeak(durationMs = 3200) {
+  public tapToSpeak(durationMs = 5000, onCountdown?: (seconds: number | null) => void) {
     if (this.geminiRecognizer) {
-      this.geminiRecognizer.startTapToSpeak(durationMs);
+      this.geminiRecognizer.startTapToSpeak(durationMs, onCountdown);
     }
   }
 
@@ -758,9 +758,22 @@ export class AudioManager {
         }
       }
 
-      // Start Gemini Cloud Audio Recognizer (Direct microphone PCM -> Gemini Live STT)
+      // Start Gemini Cloud Audio Recognizer (5-Second Chunk STT)
       const geminiSuccess = await this.startGeminiCloudRecognizer();
       if (geminiSuccess) {
+        // Also run Web Speech API simultaneously if supported on this device/browser
+        if (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) {
+          if (!this.recognition) {
+            this.initRecognition();
+          }
+          if (this.recognition) {
+            try {
+              this.recognition.start();
+            } catch {
+              // already running or transitioning
+            }
+          }
+        }
         return true;
       }
 

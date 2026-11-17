@@ -55,6 +55,7 @@ export default function App() {
   const [showMicSettings, setShowMicSettings] = useState<boolean>(false);
   const [showMobileCart, setShowMobileCart] = useState<boolean>(false);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [tapToSpeakSeconds, setTapToSpeakSeconds] = useState<number | null>(null);
 
   // Listen for Gemini API Key error notifications
   useEffect(() => {
@@ -505,14 +506,16 @@ export default function App() {
   };
 
   /**
-   * Direct Tap-to-Speak trigger (Push-to-Talk for loud dining halls)
+   * Direct Tap-to-Speak trigger (Push-to-Talk for loud dining halls with 5-second chunk & break)
    */
   const handleTapToSpeak = async () => {
     resetInactivityTimer();
     if (!isMicActive) {
       await startMic();
     }
-    globalAudioManager.tapToSpeak(3200);
+    globalAudioManager.tapToSpeak(5000, seconds => {
+      setTapToSpeakSeconds(seconds);
+    });
   };
 
   return (
@@ -556,6 +559,7 @@ export default function App() {
             interimText={interimTranscript}
             onTriggerBargeIn={handleTriggerBargeIn}
             onTapToSpeak={handleTapToSpeak}
+            tapToSpeakCountdown={tapToSpeakSeconds}
             isSpeaking={voiceState === 'SPEAKING'}
           />
 

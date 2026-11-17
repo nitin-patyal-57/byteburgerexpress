@@ -252,13 +252,19 @@ export class GeminiCloudAudioRecognizer {
   private isSpeaking = false;
   private isTranscribing = false;
 
-  private pcmChunks: Float32Array[] = [];
+  // 5-Second Periodic Chunk Engine
+  private currentChunkFrames: Float32Array[] = [];
+  private chunkStartTime: number = Date.now();
+  private chunkPeakVolume: number = 0;
+  private chunkSpeechDetected: boolean = false;
+  private lastSpeechTime: number = 0;
+  private isTapToSpeakActive: boolean = false;
+  private tapToSpeakTimer: any = null;
+  private tapToSpeakInterval: any = null;
+  private onCountdownCallback: ((seconds: number | null) => void) | null = null;
+
   private preRollBuffer: Float32Array[] = []; // Rolling buffer to preserve the first words (~340ms)
-  private speechDetected = false;
-  private silenceTimer: any = null;
-  private speechStartTime = 0;
   private ambientNoiseFloor = 4.0;
-  private monitorInterval: any = null;
 
   private onTranscriptCallback: ((text: string) => void) | null = null;
   private onInterimCallback: ((text: string) => void) | null = null;
@@ -380,12 +386,12 @@ export class GeminiCloudAudioRecognizer {
       this.gainNode.connect(this.audioCtx.destination);
 
       this.processor.onaudioprocess = (e: AudioProcessingEvent) => {
-        if (!this.isListening || this.isSpeaking || this.isTranscribing) return;
+        if (!this.isListening || this.isSpeaking) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const frame = new Float32Array(inputData);
 
-        // Keep last 4 rolling audio frames (~340ms) so the start of words ("Add", "One", "Bhai") is never chopped off
+        // Keep rolling pre-roll buffer (last 4 frames ~340ms)
         this.preRollBuffer.push(frame);
         if (this.preRollBuffer.length > 4) {
           this.preRollBuffer.shift();
@@ -400,46 +406,65 @@ export class GeminiCloudAudioRecognizer {
         const volPercent = Math.min(100, Math.round(rms * 450));
         this.onVolumeCallback?.(volPercent);
 
-        // Dynamically track ambient hall noise floor when not speaking
-        if (!this.speechDetected) {
+        // Track peak volume in current 5-second chunk
+        if (volPercent > this.chunkPeakVolume) {
+          this.chunkPeakVolume = volPercent;
+        }
+
+        // Dynamically track ambient hall noise floor when quiet
+        if (!this.chunkSpeechDetected) {
           this.ambientNoiseFloor = this.ambientNoiseFloor * 0.95 + volPercent * 0.05;
         }
 
-        // Adaptive Noise Gate: must exceed user threshold and ambient floor (capped at 7.5% so customer voice is never drowned)
+        // Speech detection gate
         const gate = this.filterConfig.noiseGateThreshold;
         const effectiveGate = Math.max(gate, Math.min(this.ambientNoiseFloor + 1.2, 7.5));
         const IS_SPEECH = volPercent >= effectiveGate;
 
         if (IS_SPEECH) {
-          if (!this.speechDetected) {
-            this.speechDetected = true;
-            this.speechStartTime = Date.now();
-            // Prepend pre-roll buffer so the start of utterance is 100% captured!
-            this.pcmChunks = [...this.preRollBuffer];
+          if (!this.chunkSpeechDetected) {
+            this.chunkSpeechDetected = true;
             this.onInterimCallback?.('Listening to your order...');
-            this.onLogCallback?.(`Speech detected (${volPercent}% >= effective gate ${effectiveGate.toFixed(1)}%) — recording`);
+            this.onLogCallback?.(`Speech detected (${volPercent}% >= gate ${effectiveGate.toFixed(1)}%)`);
           }
+          this.lastSpeechTime = Date.now();
+        }
 
-          if (this.silenceTimer) {
-            clearTimeout(this.silenceTimer);
-            this.silenceTimer = null;
-          }
+        this.currentChunkFrames.push(frame);
 
-          this.pcmChunks.push(frame);
+        // If in Tap-to-Speak mode, let the dedicated 5s timer handle the commit
+        if (this.isTapToSpeakActive) {
+          return;
+        }
 
-          // Hard ceiling: commit after 3.8 seconds of continuous speech
-          if (Date.now() - this.speechStartTime > 3800) {
-            this.commitUtterance();
-          }
-        } else if (this.speechDetected) {
-          this.pcmChunks.push(frame);
+        // Continuous 5-Second Periodic Chunk Engine:
+        const now = Date.now();
+        const chunkElapsed = now - this.chunkStartTime;
 
-          if (!this.silenceTimer) {
-            // Natural speech pause timeout (default 650ms)
-            const silenceWaitMs = Math.max(400, this.filterConfig.silenceCutoffMs || 650);
-            this.silenceTimer = setTimeout(() => {
-              this.commitUtterance();
-            }, silenceWaitMs);
+        // Commit condition:
+        // 1. Full 5-second chunk reached (5000ms), OR
+        // 2. Speech finished early: speech was detected, followed by >= 750ms of silence, and chunk is at least 1.5s
+        const speechFinishedEarly =
+          this.chunkSpeechDetected &&
+          this.lastSpeechTime > 0 &&
+          now - this.lastSpeechTime >= 750 &&
+          chunkElapsed >= 1500;
+
+        const is5SecondBoundary = chunkElapsed >= 5000;
+
+        if (is5SecondBoundary || speechFinishedEarly) {
+          const framesToProcess = [...this.currentChunkFrames];
+          const hadSpeech = this.chunkSpeechDetected || this.chunkPeakVolume >= effectiveGate;
+
+          // Start next 5-second chunk immediately (preserve 2 frames ~170ms overlap)
+          this.currentChunkFrames = this.currentChunkFrames.slice(-2);
+          this.chunkStartTime = now;
+          this.chunkPeakVolume = 0;
+          this.chunkSpeechDetected = false;
+          this.lastSpeechTime = 0;
+
+          if (hadSpeech && !this.isTranscribing) {
+            this.processChunk(framesToProcess);
           }
         }
       };
@@ -452,45 +477,30 @@ export class GeminiCloudAudioRecognizer {
     }
   }
 
-  private async commitUtterance() {
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
-    }
-
-    if (!this.speechDetected || this.pcmChunks.length === 0 || this.isTranscribing) {
-      this.pcmChunks = [];
-      this.speechDetected = false;
-      return;
-    }
+  private async processChunk(frames: Float32Array[]) {
+    if (frames.length === 0 || this.isTranscribing || this.isSpeaking) return;
 
     this.isTranscribing = true;
     this.onStateCallback?.('THINKING');
-    this.onInterimCallback?.('Understanding order with Gemini...');
+    this.onInterimCallback?.('Checking order with Gemini...');
 
     try {
       let totalLength = 0;
-      for (const chunk of this.pcmChunks) {
+      for (const chunk of frames) {
         totalLength += chunk.length;
       }
 
       const merged = new Float32Array(totalLength);
       let offset = 0;
-      for (const chunk of this.pcmChunks) {
+      for (const chunk of frames) {
         merged.set(chunk, offset);
         offset += chunk.length;
       }
 
-      // Reset chunks for next utterance immediately
-      this.pcmChunks = [];
-      this.preRollBuffer = [];
-      this.speechDetected = false;
-
       const sampleRate = this.audioCtx?.sampleRate || 48000;
       const durationSec = (totalLength / sampleRate).toFixed(1);
 
-      // Minimum 0.25s speech duration to filter out accidental clicks
-      if (totalLength < sampleRate * 0.25) {
+      if (totalLength < sampleRate * 0.3) {
         this.isTranscribing = false;
         this.onInterimCallback?.('');
         if (this.isListening && !this.isSpeaking) {
@@ -499,16 +509,13 @@ export class GeminiCloudAudioRecognizer {
         return;
       }
 
-      this.onLogCallback?.(`Sending ${durationSec}s audio to Gemini 1.5 Flash...`);
+      this.onLogCallback?.(`Analyzing ${durationSec}s chunk with Gemini 1.5 Flash...`);
 
-      // Encode to standard 16kHz mono WAV base64
       const base64Wav = encodePcmToWavBase64(merged, sampleRate);
-
-      // Transcribe via Gemini
       const text = await transcribeAudioWithGemini(base64Wav);
 
       if (text && this.isListening) {
-        this.onLogCallback?.(`Gemini recognized: "${text}"`);
+        this.onLogCallback?.(`Gemini 5s chunk recognized: "${text}"`);
         this.onInterimCallback?.('');
         this.onTranscriptCallback?.(text);
       } else {
@@ -518,7 +525,7 @@ export class GeminiCloudAudioRecognizer {
         }
       }
     } catch (e: any) {
-      this.onLogCallback?.(`Gemini recognition error: ${e?.message || e}`);
+      this.onLogCallback?.(`Chunk recognition error: ${e?.message || e}`);
       this.onInterimCallback?.('');
       if (this.isListening && !this.isSpeaking) {
         this.onStateCallback?.('LISTENING');
@@ -530,45 +537,79 @@ export class GeminiCloudAudioRecognizer {
 
   /**
    * Push-to-Talk / Tap-to-Speak trigger:
-   * Explicitly opens recording for the customer right at the kiosk for 3.2 seconds.
-   * Completely immune to ambient hall chatter!
+   * Explicitly opens a clean 5-second recording chunk with on-screen countdown.
+   * At the end of 5 seconds, provides a distinct break and adds to cart.
    */
-  public startTapToSpeak(durationMs = 3200) {
+  public startTapToSpeak(durationMs = 5000, onCountdown?: (seconds: number | null) => void) {
     if (this.isSpeaking || this.isTranscribing) return;
+
     this.isListening = true;
-    this.speechDetected = true;
-    this.speechStartTime = Date.now();
-    this.pcmChunks = [];
-    this.onInterimCallback?.('Listening to your order... Speak now!');
+    this.isTapToSpeakActive = true;
+    this.currentChunkFrames = [];
+    this.chunkStartTime = Date.now();
+    this.chunkPeakVolume = 0;
+    this.chunkSpeechDetected = true;
+    this.lastSpeechTime = Date.now();
+    this.onCountdownCallback = onCountdown || null;
+
+    this.onInterimCallback?.('Listening to your order (5s chunk)... Speak now!');
     this.onStateCallback?.('LISTENING');
 
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
+    if (this.tapToSpeakTimer) {
+      clearTimeout(this.tapToSpeakTimer);
+      this.tapToSpeakTimer = null;
+    }
+    if (this.tapToSpeakInterval) {
+      clearInterval(this.tapToSpeakInterval);
+      this.tapToSpeakInterval = null;
     }
 
-    setTimeout(() => {
-      if (this.speechDetected && !this.isTranscribing && this.pcmChunks.length > 0) {
-        this.commitUtterance();
+    let remaining = Math.round(durationMs / 1000);
+    this.onCountdownCallback?.(remaining);
+
+    this.tapToSpeakInterval = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        this.onCountdownCallback?.(remaining);
+      } else {
+        clearInterval(this.tapToSpeakInterval);
+        this.tapToSpeakInterval = null;
       }
+    }, 1000);
+
+    this.tapToSpeakTimer = setTimeout(async () => {
+      this.isTapToSpeakActive = false;
+      this.onCountdownCallback?.(null);
+
+      const frames = [...this.currentChunkFrames];
+      this.currentChunkFrames = [];
+      this.chunkStartTime = Date.now();
+
+      this.onInterimCallback?.('⚡ Checking order & adding to cart...');
+      await this.processChunk(frames);
     }, durationMs);
   }
 
   public pauseForSpeaking() {
     this.isSpeaking = true;
-    this.speechDetected = false;
-    this.pcmChunks = [];
+    this.currentChunkFrames = [];
     this.preRollBuffer = [];
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
+    if (this.tapToSpeakTimer) {
+      clearTimeout(this.tapToSpeakTimer);
+      this.tapToSpeakTimer = null;
+    }
+    if (this.tapToSpeakInterval) {
+      clearInterval(this.tapToSpeakInterval);
+      this.tapToSpeakInterval = null;
     }
   }
 
   public resumeListening() {
     this.isSpeaking = false;
-    this.speechDetected = false;
-    this.pcmChunks = [];
+    this.chunkStartTime = Date.now();
+    this.currentChunkFrames = [];
+    this.chunkPeakVolume = 0;
+    this.chunkSpeechDetected = false;
     this.preRollBuffer = [];
     if (this.isListening && !this.isTranscribing) {
       this.onStateCallback?.('LISTENING');
@@ -579,13 +620,16 @@ export class GeminiCloudAudioRecognizer {
     this.isListening = false;
     this.isSpeaking = false;
     this.isTranscribing = false;
-    this.speechDetected = false;
-    this.pcmChunks = [];
+    this.isTapToSpeakActive = false;
+    this.currentChunkFrames = [];
     this.preRollBuffer = [];
-
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
+    if (this.tapToSpeakTimer) {
+      clearTimeout(this.tapToSpeakTimer);
+      this.tapToSpeakTimer = null;
+    }
+    if (this.tapToSpeakInterval) {
+      clearInterval(this.tapToSpeakInterval);
+      this.tapToSpeakInterval = null;
     }
 
     try {
