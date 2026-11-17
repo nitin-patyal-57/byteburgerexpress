@@ -57,7 +57,7 @@ export const SEED_MENU_ITEMS: MenuItem[] = [
     calories: 640,
     imageUrl: 'https://images.unsplash.com/photo-1586190848861-99aa4a171e90?auto=format&fit=crop&w=600&q=80',
     availableModifiers: BURGER_MODIFIERS,
-    synonyms: ['cheese burger', 'cheddar', 'double cheese veg']
+    synonyms: ['double cheese burger', 'double cheese', 'cheese burger', 'cheddar', 'double cheese veg', 'cheddar burger']
   },
   {
     id: 'b_veggie_delight',

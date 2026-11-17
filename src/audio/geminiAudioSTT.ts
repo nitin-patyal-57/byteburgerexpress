@@ -87,12 +87,12 @@ export async function transcribeAudioWithGemini(
   apiKey: string = getGeminiApiKey()
 ): Promise<string> {
   const cleanKey = (apiKey || '').trim();
-  if (!cleanKey || cleanKey.length < 15) {
+  if (!cleanKey || cleanKey.length < 25 || cleanKey.startsWith('AQ.') || cleanKey.includes('AIzaSyBOoTz')) {
     console.warn('Valid Gemini API Key not configured:', cleanKey);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('gemini_api_key_error', {
-          detail: 'No valid Gemini API key configured. Please enter your key in Mic Tuning.',
+          detail: 'Gemini API Key Required: Tap here to enter your free Google Gemini API key in Mic Tuning.',
         })
       );
     }
@@ -131,7 +131,7 @@ export async function transcribeAudioWithGemini(
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4500);
+  const timeoutId = setTimeout(() => controller.abort(), 6500);
 
   try {
     const res = await fetch(endpoint, {
@@ -151,10 +151,16 @@ export async function transcribeAudioWithGemini(
       } catch {}
       console.warn('Gemini audio transcription HTTP error:', res.status, errDetail);
 
-      if (typeof window !== 'undefined' && (res.status === 403 || res.status === 400)) {
+      if (typeof window !== 'undefined') {
+        let msg = errDetail;
+        if (res.status === 403 || errDetail.toLowerCase().includes('leaked')) {
+          msg = 'Gemini API Key was reported as leaked/revoked. Tap to enter a new key in Mic Tuning.';
+        } else if (res.status === 401) {
+          msg = 'Invalid API key (HTTP 401). Tap to enter a key starting with AIzaSy... in Mic Tuning.';
+        }
         window.dispatchEvent(
           new CustomEvent('gemini_api_key_error', {
-            detail: `Gemini API Key Error: ${errDetail}. Please update your API key in Mic Tuning or Admin.`,
+            detail: msg,
           })
         );
       }
@@ -317,8 +323,8 @@ export class GeminiCloudAudioRecognizer {
       this.isListening = true;
       this.isSpeaking = false;
       this.isTranscribing = false;
-      this.pcmChunks = [];
-      this.speechDetected = false;
+      this.currentChunkFrames = [];
+      this.chunkSpeechDetected = false;
 
       if (!this.mediaStream) {
         this.mediaStream = await navigator.mediaDevices.getUserMedia({

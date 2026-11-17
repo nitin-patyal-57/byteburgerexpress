@@ -913,7 +913,44 @@ export function parseDeterministicIntent(
   // Find matching items from SEED_MENU_ITEMS
   const matchedItems: Array<{ item: typeof SEED_MENU_ITEMS[0]; qty: number; matchedPhrase: string }> = [];
 
-  for (const item of SEED_MENU_ITEMS) {
+  // DIRECT "ADD <ITEM>" RULE:
+  // If the user says "add ..." in front of any item name, guarantee direct addition to the cart!
+  const addMatch = text.match(/\b(?:add|daal do|dalo|lagao|kardo|kar do|include)\s+(?:one|two|three|1|2|3|ek|do|a|an)?\s*(.+)/i);
+  if (addMatch && addMatch[1]) {
+    const rawTarget = addMatch[1].trim();
+    let bestDirectMatch: { item: typeof SEED_MENU_ITEMS[0]; matchedPhrase: string } | null = null;
+    let longestMatchLen = 0;
+
+    for (const item of SEED_MENU_ITEMS) {
+      const en = item.nameEn.toLowerCase();
+      let phrase = '';
+      if (en.includes(rawTarget) || rawTarget.includes(en)) {
+        phrase = en;
+      } else {
+        for (const s of item.synonyms) {
+          const sl = s.toLowerCase();
+          if (rawTarget.includes(sl) || sl.includes(rawTarget)) {
+            if (sl.length > phrase.length) {
+              phrase = sl;
+            }
+          }
+        }
+      }
+
+      if (phrase.length > longestMatchLen) {
+        longestMatchLen = phrase.length;
+        bestDirectMatch = { item, matchedPhrase: phrase };
+      }
+    }
+
+    if (bestDirectMatch) {
+      matchedItems.push({ item: bestDirectMatch.item, qty: parsedQty, matchedPhrase: bestDirectMatch.matchedPhrase });
+    }
+  }
+
+  // If direct "add ..." didn't match, run general multi-item parser
+  if (matchedItems.length === 0) {
+    for (const item of SEED_MENU_ITEMS) {
     const enName = item.nameEn.toLowerCase();
     const hiName = item.nameHi;
     let matchedPhrase: string | null = null;
@@ -960,6 +997,7 @@ export function parseDeterministicIntent(
       }
     }
   }
+}
 
   // Deduplicate overlapping substring matches:
   // e.g. If "peri fries" matched s_peri_fries, and "fries" matched s_salted_fries,
@@ -1014,7 +1052,7 @@ export function parseDeterministicIntent(
         else if (/\b(5|five|paanch)\b/i.test(clause)) clauseQty = 5;
 
         if (!matchedItems.some(m => m.item.id === topItem!.id)) {
-          matchedItems.push({ item: topItem, qty: clauseQty });
+          matchedItems.push({ item: topItem, qty: clauseQty, matchedPhrase: topItem.nameEn.toLowerCase() });
         }
       }
     }

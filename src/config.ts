@@ -3,10 +3,8 @@
  * Supports local development, hosted cloud backends, and standalone APK environments.
  */
 
-// Bundled fallback key safely assembled to avoid GitHub secret scanner triggers on git push
-const BUNDLED_FALLBACK_KEY = ['AQ', '.', 'Ab8RN6KLz5ROL1s8M', '-', 'jL8UkEeAQaKqB5wCCeEeHeGaMoKyPWFw'].join('');
-
-export const DEFAULT_GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || BUNDLED_FALLBACK_KEY).trim();
+// Runtime Backend and API Configuration for ByteBurger Express
+// Supports local development, hosted cloud backends, and standalone APK environments.
 
 export function getBackendBaseUrl(): string {
   if (typeof window !== 'undefined') {
@@ -34,24 +32,29 @@ export function getGeminiApiKey(): string {
     const custom = localStorage.getItem('byteburger_gemini_api_key');
     if (custom) {
       const clean = custom.trim();
-      // Automatically purge old leaked keys or invalid keys from device storage
-      if (clean.includes('AIzaSyBOoTz') || clean.length < 15) {
+      // Automatically purge old revoked/leaked keys or invalid OAuth tokens from device storage
+      if (clean.includes('AIzaSyBOoTz') || clean.startsWith('AQ.') || clean.length < 25) {
         localStorage.removeItem('byteburger_gemini_api_key');
       } else {
         return clean;
       }
     }
   }
-  return (import.meta.env.VITE_GEMINI_API_KEY || DEFAULT_GEMINI_API_KEY).trim();
+  const envKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
+  if (envKey.includes('AIzaSyBOoTz') || envKey.startsWith('AQ.') || envKey.length < 25) {
+    return '';
+  }
+  return envKey;
 }
 
 export function setGeminiApiKey(key: string): void {
   if (typeof window !== 'undefined') {
     const clean = key.trim();
-    if (clean) {
+    if (clean && !clean.includes('AIzaSyBOoTz') && !clean.startsWith('AQ.') && clean.length >= 25) {
       localStorage.setItem('byteburger_gemini_api_key', clean);
     } else {
       localStorage.removeItem('byteburger_gemini_api_key');
     }
   }
 }
+

@@ -666,7 +666,10 @@ export class AudioManager {
    * Explicitly activates mic for 5.0 seconds for direct customer speech with clear countdown and break.
    * Completely bypasses hall noise.
    */
-  public tapToSpeak(durationMs = 5000, onCountdown?: (seconds: number | null) => void) {
+  public async tapToSpeak(durationMs = 5000, onCountdown?: (seconds: number | null) => void) {
+    if (!this.geminiRecognizer) {
+      await this.startGeminiCloudRecognizer();
+    }
     if (this.geminiRecognizer) {
       this.geminiRecognizer.startTapToSpeak(durationMs, onCountdown);
     }
@@ -694,7 +697,7 @@ export class AudioManager {
           },
           (state: 'LISTENING' | 'THINKING' | 'IDLE') => {
             if (this.onStateChangeCallback && !this.isSpeaking) {
-              this.onStateChangeCallback(state);
+              this.onStateChangeCallback(state === 'IDLE' ? 'IDLE' : 'LISTENING');
             }
           },
           (msg: string) => {
@@ -736,32 +739,10 @@ export class AudioManager {
     );
 
     try {
-      if (Capacitor.isNativePlatform()) {
-        try {
-          const avail = await CapSpeechRecognition.available();
-          if (avail && avail.available) {
-            this.isNativeAvailable = true;
-            this.isListening = true;
-            this.recognitionState = 'ACTIVE';
-            this.onStateChangeCallback('LISTENING');
-            this.logRCA('MIC_START', 'Native Capacitor Speech Recognition active and listening');
-
-            // Launch continuous native recognition loop!
-            this.runNativeRecognitionLoop();
-            return true;
-          } else {
-            this.isNativeAvailable = false;
-            this.logRCA('MIC_START', 'No OS SpeechRecognizer on device. Using Gemini Cloud Audio Recognizer with API Key!');
-          }
-        } catch {
-          this.isNativeAvailable = false;
-        }
-      }
-
-      // Start Gemini Cloud Audio Recognizer (5-Second Chunk STT)
+      // 1. Primary: Gemini Cloud Audio Recognizer (Near-Field Acoustic Biquad Filtering + RMS Noise Gate + 5-Second Periodic Slicing)
       const geminiSuccess = await this.startGeminiCloudRecognizer();
       if (geminiSuccess) {
-        // Also run Web Speech API simultaneously if supported on this device/browser
+        // Also run Web Speech API in parallel as immediate local fallback if supported
         if (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) {
           if (!this.recognition) {
             this.initRecognition();
@@ -775,6 +756,26 @@ export class AudioManager {
           }
         }
         return true;
+      }
+
+      // 2. Native Capacitor fallback if Gemini recognizer could not start
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const avail = await CapSpeechRecognition.available();
+          if (avail && avail.available) {
+            this.isNativeAvailable = true;
+            this.isListening = true;
+            this.recognitionState = 'ACTIVE';
+            this.onStateChangeCallback('LISTENING');
+            this.logRCA('MIC_START', 'Native Capacitor Speech Recognition active and listening');
+
+            // Launch continuous native recognition loop!
+            this.runNativeRecognitionLoop();
+            return true;
+          }
+        } catch {
+          this.isNativeAvailable = false;
+        }
       }
 
       if (!this.audioCtx) {
