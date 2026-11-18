@@ -502,13 +502,21 @@ export class GeminiCloudAudioRecognizer {
       this.chunkSpeechDetected = false;
 
       if (!this.mediaStream) {
+        const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
+        // CRITICAL ANDROID POS FIX (Rockchip RK3568 / AOSP):
+        // Passing echoCancellation: true forces Android AudioManager into MODE_IN_COMMUNICATION (earpiece mode),
+        // which silences the kiosk loudspeaker completely! Disable hardware AEC on Android because we already
+        // pause mic capture during TTS playback and run our own Biquad speech bandpass filter.
         this.mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            echoCancellation: true,
+            echoCancellation: !isAndroid,
             noiseSuppression: true,
             autoGainControl: true,
           },
         });
+        try {
+          (window as any).AndroidAudioBridge?.forceSpeaker?.();
+        } catch {}
       }
 
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -775,6 +783,14 @@ export class GeminiCloudAudioRecognizer {
     this.isSpeaking = true;
     this.currentChunkFrames = [];
     this.preRollBuffer = [];
+    if (this.mediaStream) {
+      this.mediaStream.getAudioTracks().forEach(t => {
+        t.enabled = false;
+      });
+    }
+    try {
+      (window as any).AndroidAudioBridge?.forceSpeaker?.();
+    } catch {}
     if (this.tapToSpeakTimer) {
       clearTimeout(this.tapToSpeakTimer);
       this.tapToSpeakTimer = null;
@@ -792,6 +808,11 @@ export class GeminiCloudAudioRecognizer {
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
     this.preRollBuffer = [];
+    if (this.mediaStream) {
+      this.mediaStream.getAudioTracks().forEach(t => {
+        t.enabled = true;
+      });
+    }
     if (this.isListening && !this.isTranscribing) {
       this.onStateCallback?.('LISTENING');
     }

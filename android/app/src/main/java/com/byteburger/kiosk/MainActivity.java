@@ -1,10 +1,13 @@
 package com.byteburger.kiosk;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.media.AudioManager;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -16,12 +19,23 @@ public class MainActivity extends BridgeActivity {
 
     private static final int RECORD_AUDIO_PERMISSION_REQUEST = 1001;
 
+    private class AndroidAudioBridge {
+        @JavascriptInterface
+        public void forceSpeaker() {
+            runOnUiThread(() -> forceLoudspeakerMode());
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         // Keep 10-inch kiosk screen always awake
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        // Always route hardware volume keys and playback to media loudspeaker
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
+        forceLoudspeakerMode();
 
         // Enable immersive full-screen kiosk mode
         enableKioskImmersiveMode();
@@ -36,6 +50,9 @@ public class MainActivity extends BridgeActivity {
             settings.setDomStorageEnabled(true);
             settings.setDatabaseEnabled(true);
 
+            // Expose native loudspeaker routing bridge to JS
+            bridge.getWebView().addJavascriptInterface(new AndroidAudioBridge(), "AndroidAudioBridge");
+
             bridge.getWebView().setWebChromeClient(new WebChromeClient() {
                 @Override
                 public void onPermissionRequest(final PermissionRequest request) {
@@ -44,6 +61,8 @@ public class MainActivity extends BridgeActivity {
                         for (String r : resources) {
                             if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) {
                                 request.grant(resources);
+                                // Re-assert loudspeaker routing after mic permission grant
+                                forceLoudspeakerMode();
                                 return;
                             }
                         }
@@ -51,6 +70,26 @@ public class MainActivity extends BridgeActivity {
                     });
                 }
             });
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        forceLoudspeakerMode();
+    }
+
+    private void forceLoudspeakerMode() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                // Critical fix for Rockchip RK3568 / AOSP POS tablets:
+                // Prevent WebView getUserMedia from trapping audio in MODE_IN_COMMUNICATION (silent earpiece)
+                am.setMode(AudioManager.MODE_NORMAL);
+                am.setSpeakerphoneOn(true);
+                am.setMicrophoneMute(false);
+            }
+        } catch (Exception ignored) {
         }
     }
 
@@ -69,6 +108,7 @@ public class MainActivity extends BridgeActivity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             enableKioskImmersiveMode();
+            forceLoudspeakerMode();
         }
     }
 

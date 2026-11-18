@@ -1,5 +1,5 @@
 import { normalizeQSRSpokenUtterance } from '../core/acousticNormalizer';
-import { getBackendBaseUrl } from '../config';
+import { getBackendBaseUrl, getVoiceApiKey } from '../config';
 import { apkLogger } from '../utils/apkLogger';
 import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition as CapSpeechRecognition } from '@capacitor-community/speech-recognition';
@@ -1016,11 +1016,18 @@ export class AudioManager {
   public playSubtleHospitalityChime() {
     if (!this.playGreetingChime) return;
     try {
+      try {
+        (window as any).AndroidAudioBridge?.forceSpeaker?.();
+      } catch {}
+
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioCtx) return;
-      const ctx = new AudioCtx();
+      if (!this.audioCtx) {
+        this.audioCtx = new AudioCtx();
+      }
+      const ctx = this.audioCtx;
       if (ctx.state === 'suspended') {
-        ctx.resume();
+        ctx.resume().catch(() => {});
       }
 
       const now = ctx.currentTime;
@@ -1029,7 +1036,7 @@ export class AudioManager {
       const gain1 = ctx.createGain();
       osc1.type = 'sine';
       osc1.frequency.setValueAtTime(523.25, now);
-      gain1.gain.setValueAtTime(0.04, now);
+      gain1.gain.setValueAtTime(0.2, now);
       gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
       osc1.connect(gain1);
       gain1.connect(ctx.destination);
@@ -1041,7 +1048,7 @@ export class AudioManager {
       const gain2 = ctx.createGain();
       osc2.type = 'sine';
       osc2.frequency.setValueAtTime(659.25, now + 0.08);
-      gain2.gain.setValueAtTime(0.05, now + 0.08);
+      gain2.gain.setValueAtTime(0.22, now + 0.08);
       gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
       osc2.connect(gain2);
       gain2.connect(ctx.destination);
@@ -1181,6 +1188,11 @@ export class AudioManager {
       this.onStateChangeCallback('SPEAKING');
     }
 
+    // Force Android hardware loudspeaker routing (STREAM_MUSIC) before any playback
+    try {
+      (window as any).AndroidAudioBridge?.forceSpeaker?.();
+    } catch {}
+
     // Play subtle friendly welcome chime to prime human acoustic presence
     this.playSubtleHospitalityChime();
 
@@ -1207,24 +1219,70 @@ export class AudioManager {
       }
     };
 
-    // Attempt 1: Native Capacitor TTS on Android (instant, offline, zero-latency)
-    if (Capacitor.isNativePlatform()) {
+    // Attempt 1: Groq Orpheus Human Voice TTS (plays real WAV audio directly over Android STREAM_MUSIC loudspeaker!)
+    // Works on all AOSP POS tablets (Rockchip RK3568, etc.) even without Google TTS voices installed.
+    const voiceKey = getVoiceApiKey();
+    if (voiceKey && voiceKey.startsWith('gsk_')) {
       try {
-        const speakPromise = CapTextToSpeech.speak({
-          text,
-          lang: 'en-IN',
-          rate: 0.95,
-          pitch: 1.15,
-          volume: 1.0,
-          category: 'ambient',
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const startTime = Date.now();
+        // Sanitize symbols for clean speech synthesis (e.g. ₹ -> Rupees)
+        const cleanSpeechText = text.replace(/₹/g, 'Rupees ').replace(/[^\x20-\x7E\u0900-\u097F]/g, '').trim();
+
+        const res = await fetch('https://api.groq.com/openai/v1/audio/speech', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${voiceKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'canopylabs/orpheus-v1-english',
+            input: cleanSpeechText.slice(0, 220),
+            voice: 'autumn',
+            response_format: 'wav',
+          }),
+          signal: controller.signal,
         });
-        const timeoutMs = Math.max(2500, (text.split(/\s+/).length / 2) * 1000 + 2000);
-        const timeoutPromise = new Promise(resolve => setTimeout(resolve, timeoutMs));
-        await Promise.race([speakPromise, timeoutPromise]);
-        finishSpeech();
-        return;
-      } catch (e) {
-        console.warn('Native Capacitor TTS fallback:', e);
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const wavBlob = await res.blob();
+          const blobUrl = URL.createObjectURL(wavBlob);
+          const audio = new Audio(blobUrl);
+          audio.volume = 1.0;
+          this.currentAudioElement = audio;
+
+          try {
+            (window as any).AndroidAudioBridge?.forceSpeaker?.();
+          } catch {}
+
+          apkLogger.success('MIC', `Speaker playback via Groq Orpheus TTS (${Date.now() - startTime}ms)`);
+
+          const cleanupUrl = () => {
+            try {
+              URL.revokeObjectURL(blobUrl);
+            } catch {}
+          };
+
+          audio.onended = () => {
+            cleanupUrl();
+            finishSpeech();
+          };
+
+          audio.onerror = () => {
+            cleanupUrl();
+            apkLogger.warn('MIC', 'Groq WAV audio element error; falling back to local TTS');
+            this.speakWithNativeOrBrowserFallback(text, finishSpeech);
+          };
+
+          await audio.play();
+          return;
+        } else {
+          apkLogger.warn('MIC', `Groq TTS HTTP ${res.status}; falling back to local TTS`);
+        }
+      } catch (e: any) {
+        apkLogger.warn('MIC', `Groq TTS skipped (${e?.message || e}); falling back to local TTS`);
       }
     }
 
@@ -1246,6 +1304,7 @@ export class AudioManager {
           const data = await res.json();
           if (data.available && data.audioBase64) {
             const audio = new Audio(`data:audio/wav;base64,${data.audioBase64}`);
+            audio.volume = 1.0;
             this.currentAudioElement = audio;
 
             audio.onended = () => {
@@ -1253,7 +1312,7 @@ export class AudioManager {
             };
 
             audio.onerror = () => {
-              this.speakWithBrowserFallback(text, finishSpeech);
+              this.speakWithNativeOrBrowserFallback(text, finishSpeech);
             };
 
             await audio.play();
@@ -1261,11 +1320,47 @@ export class AudioManager {
           }
         }
       } catch {
-        // Fall through to browser speech synthesis
+        // Fall through to native/browser speech synthesis
       }
     }
 
-    // Attempt 3: High-fidelity female human browser speech synthesis
+    // Attempt 3 & 4: Native Capacitor TTS (only if voices exist on device) -> Browser speechSynthesis
+    await this.speakWithNativeOrBrowserFallback(text, finishSpeech);
+  }
+
+  private async speakWithNativeOrBrowserFallback(text: string, finishSpeech: () => void) {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const supported = await CapTextToSpeech.getSupportedVoices();
+        const hasNativeVoices = Array.isArray(supported?.voices) && supported.voices.length > 0;
+        if (hasNativeVoices) {
+          let spoke = false;
+          const speakPromise = CapTextToSpeech.speak({
+            text,
+            lang: 'en-IN',
+            rate: 0.95,
+            pitch: 1.15,
+            volume: 1.0,
+            category: 'playback',
+          }).then(() => {
+            spoke = true;
+          });
+          const timeoutMs = Math.max(2500, (text.split(/\s+/).length / 2) * 1000 + 2000);
+          const timeoutPromise = new Promise(resolve => setTimeout(resolve, timeoutMs));
+          await Promise.race([speakPromise, timeoutPromise]);
+          if (spoke) {
+            finishSpeech();
+            return;
+          }
+          apkLogger.warn('MIC', 'Native Android TTS timed out with no audio; falling back to Web Speech');
+        } else {
+          apkLogger.warn('MIC', 'No Android OS TTS engine voices installed on device; using Web Speech fallback');
+        }
+      } catch (e: any) {
+        apkLogger.warn('MIC', `Native Capacitor TTS error: ${e?.message || e}`);
+      }
+    }
+
     await this.speakWithBrowserFallback(text, finishSpeech);
   }
 
