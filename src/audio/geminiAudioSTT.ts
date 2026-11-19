@@ -152,7 +152,7 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise
   form.append('model', 'whisper-large-v3-turbo');
   form.append('temperature', '0');
   form.append('response_format', 'json');
-  form.append('prompt', 'ByteBurger Express kiosk food order: Add double cheese burger, peri peri fries, coke, confirm order');
+  form.append('prompt', 'ByteBurger Express kiosk food order in English, Hindi and Hinglish: Add double cheese burger, peri peri fries, coke, confirm order, ek burger aur fries add kardo, cancel, nahi chahiye, namaste, shukriya, bhai');
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12000);
@@ -452,24 +452,32 @@ export class GeminiCloudAudioRecognizer {
   private onVolumeCallback: ((vol: number) => void) | null = null;
   private onStateCallback: ((state: 'LISTENING' | 'THINKING' | 'IDLE') => void) | null = null;
   private onLogCallback: ((message: string) => void) | null = null;
+  private onBargeInCallback: (() => void) | null = null;
+  private bargeInConsecutiveFrames: number = 0;
 
   constructor(
     onTranscript: (text: string) => void,
     onInterim: (text: string) => void,
     onVolume: (vol: number) => void,
     onState: (state: 'LISTENING' | 'THINKING' | 'IDLE') => void,
-    onLog?: (message: string) => void
+    onLog?: (message: string) => void,
+    onBargeIn?: () => void
   ) {
     this.onTranscriptCallback = onTranscript;
     this.onInterimCallback = onInterim;
     this.onVolumeCallback = onVolume;
     this.onStateCallback = onState;
     this.onLogCallback = onLog || null;
+    this.onBargeInCallback = onBargeIn || null;
 
     this.filterConfig = getStoredMicFilterConfig();
     this.unsubscribeFilter = subscribeToMicFilterConfig(cfg => {
       this.updateFilterConfig(cfg);
     });
+  }
+
+  public setOnBargeIn(cb: () => void) {
+    this.onBargeInCallback = cb;
   }
 
   public updateFilterConfig(config: MicFilterConfig) {
@@ -575,14 +583,14 @@ export class GeminiCloudAudioRecognizer {
       this.gainNode.connect(this.audioCtx.destination);
 
       this.processor.onaudioprocess = (e: AudioProcessingEvent) => {
-        if (!this.isListening || this.isSpeaking) return;
+        if (!this.isListening) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const frame = new Float32Array(inputData);
 
-        // Keep rolling pre-roll buffer (last 4 frames ~340ms)
+        // Keep rolling pre-roll buffer (last 5 frames ~425ms)
         this.preRollBuffer.push(frame);
-        if (this.preRollBuffer.length > 4) {
+        if (this.preRollBuffer.length > 5) {
           this.preRollBuffer.shift();
         }
 
@@ -594,6 +602,40 @@ export class GeminiCloudAudioRecognizer {
         const rms = Math.sqrt(sumSq / inputData.length);
         const volPercent = Math.min(100, Math.round(rms * 450));
         this.onVolumeCallback?.(volPercent);
+
+        // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Interruption Detection
+        if (this.isSpeaking) {
+          // When assistant speaks, speaker sound radiates into tablet mic.
+          // Customer speaking directly in front of mic produces higher near-field acoustic energy.
+          const bargeInGate = Math.max(this.filterConfig.noiseGateThreshold + 7.5, 17.0);
+
+          if (volPercent >= bargeInGate) {
+            this.bargeInConsecutiveFrames++;
+            // 2 consecutive frames (~170ms) confirms human customer voice, not a momentary transient click
+            if (this.bargeInConsecutiveFrames >= 2) {
+              this.isSpeaking = false;
+              this.bargeInConsecutiveFrames = 0;
+              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${volPercent}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <40ms...`);
+
+              // Trigger immediate speech cancellation in audioManager
+              if (this.onBargeInCallback) {
+                this.onBargeInCallback();
+              }
+
+              // Seed the new customer utterance chunk with the pre-roll frames so their opening words are preserved!
+              this.currentChunkFrames = [...this.preRollBuffer];
+              this.chunkStartTime = Date.now();
+              this.chunkPeakVolume = volPercent;
+              this.chunkSpeechDetected = true;
+              this.lastSpeechTime = Date.now();
+              this.onStateCallback?.('LISTENING');
+              this.onInterimCallback?.('Listening to your interruption...');
+            }
+          } else {
+            this.bargeInConsecutiveFrames = 0;
+          }
+          return;
+        }
 
         // Track peak volume in current 5-second chunk
         if (volPercent > this.chunkPeakVolume) {
@@ -782,12 +824,11 @@ export class GeminiCloudAudioRecognizer {
   public pauseForSpeaking() {
     this.isSpeaking = true;
     this.currentChunkFrames = [];
-    this.preRollBuffer = [];
-    if (this.mediaStream) {
-      this.mediaStream.getAudioTracks().forEach(t => {
-        t.enabled = false;
-      });
-    }
+    this.chunkPeakVolume = 0;
+    this.chunkSpeechDetected = false;
+    this.bargeInConsecutiveFrames = 0;
+    // CRITICAL TWO-WAY BARGE-IN: Keep microphone tracks ENABLED so the kiosk
+    // can hear customer interruptions while responding!
     try {
       (window as any).AndroidAudioBridge?.forceSpeaker?.();
     } catch {}
@@ -807,7 +848,7 @@ export class GeminiCloudAudioRecognizer {
     this.currentChunkFrames = [];
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
-    this.preRollBuffer = [];
+    this.bargeInConsecutiveFrames = 0;
     if (this.mediaStream) {
       this.mediaStream.getAudioTracks().forEach(t => {
         t.enabled = true;

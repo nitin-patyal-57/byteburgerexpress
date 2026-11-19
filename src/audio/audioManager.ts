@@ -22,36 +22,36 @@ export interface FemaleVoicePersona {
 
 export const FEMALE_PERSONAS: FemaleVoicePersona[] = [
   {
-    id: 'ananya',
-    name: 'Ananya (Warm Host)',
-    description: 'Warm, natural Indian English host with friendly conversational cadence',
-    defaultPitch: 1.18,
-    defaultRate: 0.96,
-    accent: 'Indian English',
-  },
-  {
     id: 'priya',
-    name: 'Priya (Hinglish Specialist)',
-    description: 'Bilingual Hindi/English tone optimized for code-switching and desi menu items',
-    defaultPitch: 1.24,
+    name: 'Priya (Bilingual Indian Host)',
+    description: 'Authentic Indian female voice that fluently speaks Hindi, English, and mixed Hinglish',
+    defaultPitch: 1.15,
     defaultRate: 0.95,
     accent: 'Hinglish',
   },
   {
+    id: 'ananya',
+    name: 'Ananya (Indian English Host)',
+    description: 'Warm, natural Indian English host with friendly hospitality tone',
+    defaultPitch: 1.16,
+    defaultRate: 0.96,
+    accent: 'Indian English',
+  },
+  {
     id: 'meera',
-    name: 'Meera (Soft & Friendly)',
-    description: 'Gentle, clear hospitality assistant with melodious tone',
-    defaultPitch: 1.22,
+    name: 'Meera (Soft & Melodious)',
+    description: 'Gentle, clear Indian hospitality assistant with melodious tone',
+    defaultPitch: 1.20,
     defaultRate: 0.94,
     accent: 'Indian English',
   },
   {
-    id: 'jenny',
-    name: 'Jenny (Studio Natural)',
-    description: 'High-clarity neural studio female voice with crisp articulation',
-    defaultPitch: 1.08,
-    defaultRate: 0.98,
-    accent: 'Global English',
+    id: 'swara',
+    name: 'Swara (Hindi Specialist)',
+    description: 'Expressive pure Hindi and conversational Hinglish voice',
+    defaultPitch: 1.14,
+    defaultRate: 0.94,
+    accent: 'Hinglish',
   },
 ];
 
@@ -179,8 +179,8 @@ export class AudioManager {
   public lastTranscript: string | null = null;
   public lastTranscriptTime: string | null = null;
 
-  // Active Persona
-  public activePersonaId = 'ananya';
+  // Active Persona (Default: Priya - Bilingual Indian Lady Voice)
+  public activePersonaId = 'priya';
   public userPitchMultiplier = 1.0;
   public userRateMultiplier = 1.0;
 
@@ -704,8 +704,26 @@ export class AudioManager {
           },
           (msg: string) => {
             this.logRCA('RECOGNITION_RESULT', msg);
+          },
+          () => {
+            // Customer Barge-In interruption: immediately halt assistant speech in <40ms
+            this.flushImmediate();
+            this.logRCA('BARGE_IN', 'Customer barge-in detected; immediately halted assistant speech in <40ms');
+            apkLogger.info('MIC', '⚡ Customer interrupted kiosk! Assistant stopped speaking, listening to customer command...');
+            if (this.onBargeInCallback) {
+              this.onBargeInCallback();
+            }
           }
         );
+      } else {
+        this.geminiRecognizer.setOnBargeIn(() => {
+          this.flushImmediate();
+          this.logRCA('BARGE_IN', 'Customer barge-in detected; immediately halted assistant speech in <40ms');
+          apkLogger.info('MIC', '⚡ Customer interrupted kiosk! Assistant stopped speaking, listening to customer command...');
+          if (this.onBargeInCallback) {
+            this.onBargeInCallback();
+          }
+        });
       }
 
       const success = await this.geminiRecognizer.start();
@@ -975,6 +993,12 @@ export class AudioManager {
    * Barge-in immediate flush: clears queued speech buffers and halts playback in < 40ms
    */
   public flushImmediate() {
+    try {
+      (window as any).AndroidAudioBridge?.stopSpeaking?.();
+    } catch {
+      // ignore
+    }
+
     if (this.currentAudioElement) {
       try {
         this.currentAudioElement.pause();
@@ -1072,7 +1096,8 @@ export class AudioManager {
     }
     if (!voices || voices.length === 0) return null;
 
-    const isHindiText = /[\u0900-\u097F]/.test(text);
+    const isHindiOrHinglish = /[\u0900-\u097F]/.test(text) ||
+      /\b(namaste|swagat|shukriya|dhanyawad|kripya|bhai|bataiye|aur|chahiye|kijiye|daal|karein|apka|aapka|hoga|hai|hain|nahi|haan|theek|batao|karo|paneer|tikki|aloo|biryani|chai|lassi|masala)\b/i.test(text);
 
     // Strict male keyword list to exclude robotic male voices
     const MALE_KEYWORDS = [
@@ -1092,48 +1117,39 @@ export class AudioManager {
 
       let score = 0;
 
-      // Premium Neural / Natural / Studio indicator (+120)
-      if (name.includes('natural') || name.includes('neural') || name.includes('online') || name.includes('enhanced') || name.includes('premium') || name.includes('network')) {
-        score += 120;
-      }
-
-      // Hindi context matching
-      if (isHindiText && (lang.startsWith('hi') || lang.includes('in'))) {
-        score += 200;
-        if (name.includes('swara') || name.includes('kalpana') || name.includes('kavya') || name.includes('google हिन्दी')) {
-          score += 150;
-        }
-      }
-
-      // Top Indian Female Voices (+150)
-      const indianFemaleKeywords = ['heera', 'swara', 'priya', 'neerja', 'kavya', 'veena', 'sunita', 'kalpana', 'ananya', 'en-in-x-end', 'en-in-x-ena', 'hi-in-x-hia', 'hi-in-x-hid'];
-      for (const k of indianFemaleKeywords) {
-        if (name.includes(k)) score += 180;
-      }
-
-      // Indian English locale preference for ByteBurger Indian QSR (+90)
-      if (lang === 'en-in' || lang === 'en_in') {
-        score += 90;
-      }
-
-      // Highly acclaimed human female voices across Windows, Mac, Android, Chrome (+110)
-      const topFemaleVoices = [
-        'jenny', 'aria', 'ava', 'sonia', 'emma', 'samantha',
-        'victoria', 'serena', 'karen', 'moira', 'tessa', 'zira',
-        'google uk english female', 'google us english female'
+      // Top priority: Indian female voices (supports Hindi, Indian English & Hinglish)
+      const indianFemaleKeywords = [
+        'heera', 'swara', 'priya', 'neerja', 'kavya', 'veena', 'sunita',
+        'kalpana', 'ananya', 'en-in-x-end', 'en-in-x-ena', 'hi-in-x-hia',
+        'hi-in-x-hid', 'google हिन्दी', 'india', 'hindi'
       ];
-      for (const f of topFemaleVoices) {
-        if (name.includes(f)) score += 110;
+      for (const k of indianFemaleKeywords) {
+        if (name.includes(k)) score += 350;
       }
 
-      // Explicit female designation in voice name (+70)
+      // Indian locale tags
+      if (lang === 'en-in' || lang === 'en_in' || lang === 'hi-in' || lang === 'hi_in') {
+        score += 300;
+      }
+
+      // Hindi context matching: prioritize Hindi neural voice if Hindi/Hinglish phrase detected
+      if (isHindiOrHinglish && (lang.startsWith('hi') || name.includes('hindi') || name.includes('हिन्दी') || name.includes('swara') || name.includes('kalpana'))) {
+        score += 400;
+      }
+
+      // Premium Neural / Natural / Studio indicator (+100)
+      if (name.includes('natural') || name.includes('neural') || name.includes('online') || name.includes('enhanced') || name.includes('premium') || name.includes('network')) {
+        score += 100;
+      }
+
+      // Explicit female designation in voice name (+60)
       if (name.includes('female') || name.includes('woman')) {
-        score += 70;
+        score += 60;
       }
 
-      // English language compatibility (+40)
+      // Fallback English voices if no Indian voice installed (+30)
       if (lang.startsWith('en')) {
-        score += 40;
+        score += 30;
       }
 
       return score;
@@ -1158,10 +1174,9 @@ export class AudioManager {
   }
 
   /**
-   * Speaks the response with a female human voice.
-   * Primary: Native Capacitor TTS on Android for zero-latency local speech.
-   * Cloud Fallback: Gemini 3.8 Flash Lite TTS ('Kore' female voice) if configured.
-   * Browser Fallback: Tuned human female browser speech synthesizer with warm pitch and natural prosody.
+   * Speaks the response with an authentic Indian female voice (Hindi, English & mixed Hinglish).
+   * Primary: Android Native TextToSpeech via AndroidAudioBridge (Direct Hardware Loudspeaker & Zero Latency).
+   * Web Fallback: Tuned Indian female browser speech synthesizer (Google हिन्दी / Swara / Neerja / Priya) with warm pitch and natural prosody.
    */
   public async speak(text: string, onEnd?: () => void) {
     if (!text) {
@@ -1172,7 +1187,7 @@ export class AudioManager {
     this.flushImmediate();
     this.isSpeaking = true;
 
-    // Immediately pause microphone during speech so the kiosk speaker is not heard
+    // Immediately notify recognizer that speech output is starting
     this.geminiRecognizer?.pauseForSpeaking();
     if (Capacitor.isNativePlatform()) {
       try {
@@ -1206,12 +1221,12 @@ export class AudioManager {
       onEnd?.();
 
       if (this.isListening) {
-        // Exactly 1 second delay after assistant speech finishes before mic automatically turns on again to hear next item!
+        // Quick 200ms delay after assistant speech finishes before mic auto-resumes
         setTimeout(() => {
           if (this.isListening && !this.isSpeaking) {
             this.resumeListening(0);
           }
-        }, 1000);
+        }, 200);
       } else {
         if (this.onStateChangeCallback) {
           this.onStateChangeCallback('IDLE');
@@ -1219,74 +1234,46 @@ export class AudioManager {
       }
     };
 
-    // Attempt 1: Groq Orpheus Human Voice TTS (plays real WAV audio directly over Android STREAM_MUSIC loudspeaker!)
-    // Works on all AOSP POS tablets (Rockchip RK3568, etc.) even without Google TTS voices installed.
-    const voiceKey = getVoiceApiKey();
-    if (voiceKey && voiceKey.startsWith('gsk_')) {
+    // Clean symbols for speech synthesis (e.g. ₹ -> Rupees)
+    const cleanSpeechText = text.replace(/₹/g, 'Rupees ').replace(/[^\x20-\x7E\u0900-\u097F]/g, '').trim();
+    const isHindiOrHinglish = /[\u0900-\u097F]/.test(cleanSpeechText) ||
+      /\b(namaste|swagat|shukriya|dhanyawad|kripya|bhai|bataiye|aur|chahiye|kijiye|daal|karein|apka|aapka|hoga|hai|hain|nahi|haan|theek|batao|karo|paneer|tikki|aloo|biryani|chai|lassi|masala)\b/i.test(cleanSpeechText);
+    const targetLang = isHindiOrHinglish ? 'hi-IN' : 'en-IN';
+
+    const persona = FEMALE_PERSONAS.find(p => p.id === this.activePersonaId) || FEMALE_PERSONAS[0];
+    const targetPitch = persona.defaultPitch * this.userPitchMultiplier;
+    const targetRate = persona.defaultRate * this.userRateMultiplier;
+
+    // Attempt 1: Android Native TextToSpeech via AndroidAudioBridge (Direct Hardware Loudspeaker & Zero Latency)
+    const audioBridge = (window as any).AndroidAudioBridge;
+    if (audioBridge && typeof audioBridge.speakIndian === 'function') {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        const startTime = Date.now();
-        // Sanitize symbols for clean speech synthesis (e.g. ₹ -> Rupees)
-        const cleanSpeechText = text.replace(/₹/g, 'Rupees ').replace(/[^\x20-\x7E\u0900-\u097F]/g, '').trim();
+        const spoken = audioBridge.speakIndian(cleanSpeechText, targetLang, targetPitch, targetRate);
+        if (spoken) {
+          apkLogger.success('MIC', `Indian Lady Voice spoken via Android Native TTS [${targetLang}]`);
 
-        const res = await fetch('https://api.groq.com/openai/v1/audio/speech', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${voiceKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'canopylabs/orpheus-v1-english',
-            input: cleanSpeechText.slice(0, 220),
-            voice: 'autumn',
-            response_format: 'wav',
-          }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-
-        if (res.ok) {
-          const wavBlob = await res.blob();
-          const blobUrl = URL.createObjectURL(wavBlob);
-          const audio = new Audio(blobUrl);
-          audio.volume = 1.0;
-          this.currentAudioElement = audio;
-
-          try {
-            (window as any).AndroidAudioBridge?.forceSpeaker?.();
-          } catch {}
-
-          apkLogger.success('MIC', `Speaker playback via Groq Orpheus TTS (${Date.now() - startTime}ms)`);
-
-          const cleanupUrl = () => {
-            try {
-              URL.revokeObjectURL(blobUrl);
-            } catch {}
-          };
-
-          audio.onended = () => {
-            cleanupUrl();
+          const onEnded = () => {
+            window.removeEventListener('native_speech_ended', onEnded);
             finishSpeech();
           };
+          window.addEventListener('native_speech_ended', onEnded);
 
-          audio.onerror = () => {
-            cleanupUrl();
-            apkLogger.warn('MIC', 'Groq WAV audio element error; falling back to local TTS');
-            this.speakWithNativeOrBrowserFallback(text, finishSpeech);
-          };
+          // Watchdog in case native completion event doesn't fire
+          const wordCount = cleanSpeechText.split(/\s+/).length;
+          const estimatedDurationMs = Math.max(2500, (wordCount / 2.0) * 1000 + 2000);
+          this.speechWatchdogTimer = setTimeout(() => {
+            window.removeEventListener('native_speech_ended', onEnded);
+            finishSpeech();
+          }, estimatedDurationMs);
 
-          await audio.play();
           return;
-        } else {
-          apkLogger.warn('MIC', `Groq TTS HTTP ${res.status}; falling back to local TTS`);
         }
-      } catch (e: any) {
-        apkLogger.warn('MIC', `Groq TTS skipped (${e?.message || e}); falling back to local TTS`);
+      } catch (bridgeErr: any) {
+        apkLogger.warn('MIC', `Android AudioBridge TTS notice: ${bridgeErr?.message || bridgeErr}`);
       }
     }
 
-    // Attempt 2: Server-side Gemini Flash Lite TTS ('Kore' female voice)
+    // Attempt 2: Server-side Gemini Flash Lite TTS ('Kore' voice) if configured
     const baseUrl = getBackendBaseUrl();
     if (baseUrl && baseUrl.startsWith('http')) {
       try {
@@ -1295,7 +1282,7 @@ export class AudioManager {
         const res = await fetch(`${baseUrl}/api/v1/voice/synthesize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, voiceName: 'Kore' }),
+          body: JSON.stringify({ text: cleanSpeechText, voiceName: 'Kore' }),
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -1312,7 +1299,7 @@ export class AudioManager {
             };
 
             audio.onerror = () => {
-              this.speakWithNativeOrBrowserFallback(text, finishSpeech);
+              this.speakWithNativeOrBrowserFallback(cleanSpeechText, finishSpeech);
             };
 
             await audio.play();
@@ -1320,12 +1307,12 @@ export class AudioManager {
           }
         }
       } catch {
-        // Fall through to native/browser speech synthesis
+        // Fall through
       }
     }
 
-    // Attempt 3 & 4: Native Capacitor TTS (only if voices exist on device) -> Browser speechSynthesis
-    await this.speakWithNativeOrBrowserFallback(text, finishSpeech);
+    // Attempt 3: Native / Browser Speech Synthesis tuned for Indian Female Voice
+    await this.speakWithNativeOrBrowserFallback(cleanSpeechText, finishSpeech);
   }
 
   private async speakWithNativeOrBrowserFallback(text: string, finishSpeech: () => void) {
@@ -1396,11 +1383,14 @@ export class AudioManager {
     utterance.rate = Math.min(1.2, Math.max(0.7, persona.defaultRate * this.userRateMultiplier));
     utterance.volume = 1.0;
 
+    const isHindiOrHinglish = /[\u0900-\u097F]/.test(text) ||
+      /\b(namaste|swagat|shukriya|dhanyawad|kripya|bhai|bataiye|aur|chahiye|kijiye|daal|karein|apka|aapka|hoga|hai|hain|nahi|haan|theek|batao|karo|paneer|tikki|aloo|biryani|chai|lassi|masala)\b/i.test(text);
+
     if (femaleVoice) {
       utterance.voice = femaleVoice;
       utterance.lang = femaleVoice.lang;
     } else {
-      utterance.lang = 'en-IN';
+      utterance.lang = isHindiOrHinglish ? 'hi-IN' : 'en-IN';
     }
 
     let finished = false;
@@ -1416,12 +1406,11 @@ export class AudioManager {
       onEnd?.();
 
       if (this.isListening) {
-        // Exactly 1 second delay after assistant speech finishes before mic automatically turns on again to hear next item!
         setTimeout(() => {
           if (this.isListening && !this.isSpeaking) {
             this.resumeListening(0);
           }
-        }, 1000);
+        }, 200);
       } else {
         if (this.onStateChangeCallback) {
           this.onStateChangeCallback('IDLE');

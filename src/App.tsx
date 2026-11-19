@@ -361,8 +361,9 @@ export default function App() {
         }
       },
       () => {
-        // Sub-40ms Barge-in triggered!
-        console.log('Barge-in triggered by customer speech!');
+        // Sub-40ms Customer Barge-in Interruption triggered!
+        apkLogger.info('MIC', '⚡ Customer interrupted device: Assistant speech silenced instantly. Listening to customer...');
+        setInterimTranscript('⚡ Interrupted — Listening to you...');
         setVoiceState('LISTENING');
       },
       newState => {
