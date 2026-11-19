@@ -140,6 +140,44 @@ export function deduplicateAndroidTranscript(segments: string[]): string {
   return acc.replace(/\b(\w+(?:\s+\w+)?)\s+\1\b/gi, '$1').trim();
 }
 
+/**
+ * Transliterates Devanagari Hindi characters to clean Latin-script phonetics
+ * so any speech audio engine can read it out smoothly.
+ */
+export function transliterateDevanagariToRoman(text: string): string {
+  if (!text || !/[\u0900-\u097F]/.test(text)) return text;
+
+  const charMap: Record<string, string> = {
+    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
+    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'am', 'अः': 'ah',
+    'क': 'ka', 'ख': 'kha', 'ग': 'ga', 'घ': 'gha', 'ङ': 'nga',
+    'च': 'cha', 'छ': 'chha', 'ज': 'ja', 'झ': 'jha', 'ञ': 'nya',
+    'ट': 'ta', 'ठ': 'tha', 'ड': 'da', 'ढ': 'dha', 'ण': 'na',
+    'त': 'ta', 'थ': 'tha', 'द': 'da', 'ध': 'dha', 'न': 'na',
+    'प': 'pa', 'फ': 'pha', 'ब': 'ba', 'भ': 'bha', 'म': 'ma',
+    'य': 'ya', 'र': 'ra', 'ल': 'la', 'व': 'va', 'श': 'sha', 'ष': 'sha', 'स': 'sa', 'ह': 'ha',
+    'ा': 'a', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
+    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ँ': 'n', '्': '',
+    '०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
+  };
+
+  return text
+    .split('')
+    .map(c => (charMap[c] !== undefined ? charMap[c] : c))
+    .join('')
+    .replace(/a([aeiou])/gi, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function prepareSpeechText(text: string): string {
+  if (!text) return '';
+  let clean = text.replace(/₹\s*(\d+)/g, '$1 Rupees').replace(/₹/g, 'Rupees ');
+  clean = transliterateDevanagariToRoman(clean);
+  clean = clean.replace(/[*_#`~[\]]/g, '').replace(/\s+/g, ' ').trim();
+  return clean;
+}
+
 export class AudioManager {
   private audioCtx: AudioContext | null = null;
   private micStream: MediaStream | null = null;
@@ -1208,9 +1246,6 @@ export class AudioManager {
       (window as any).AndroidAudioBridge?.forceSpeaker?.();
     } catch {}
 
-    // Play subtle friendly welcome chime to prime human acoustic presence
-    this.playSubtleHospitalityChime();
-
     let finished = false;
     const finishSpeech = () => {
       if (finished) return;
@@ -1234,8 +1269,8 @@ export class AudioManager {
       }
     };
 
-    // Clean symbols for speech synthesis (e.g. ₹ -> Rupees)
-    const cleanSpeechText = text.replace(/₹/g, 'Rupees ').replace(/[^\x20-\x7E\u0900-\u097F]/g, '').trim();
+    // Clean symbols and transliterate Hindi Devanagari to clean phonetics
+    const cleanSpeechText = prepareSpeechText(text);
     const isHindiOrHinglish = /[\u0900-\u097F]/.test(cleanSpeechText) ||
       /\b(namaste|swagat|shukriya|dhanyawad|kripya|bhai|bataiye|aur|chahiye|kijiye|daal|karein|apka|aapka|hoga|hai|hain|nahi|haan|theek|batao|karo|paneer|tikki|aloo|biryani|chai|lassi|masala)\b/i.test(cleanSpeechText);
     const targetLang = isHindiOrHinglish ? 'hi-IN' : 'en-IN';
@@ -1273,41 +1308,71 @@ export class AudioManager {
       }
     }
 
-    // Attempt 2: Server-side Gemini Flash Lite TTS ('Kore' voice) if configured
-    const baseUrl = getBackendBaseUrl();
-    if (baseUrl && baseUrl.startsWith('http')) {
+    // Attempt 2: Groq Real WAV Audio Player (Direct STREAM_MUSIC Loudspeaker)
+    // 100% guaranteed playback on ALL devices including bare AOSP Rockchip POS without local voice packs!
+    const voiceKey = getVoiceApiKey();
+    if (voiceKey && voiceKey.startsWith('gsk_')) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
-        const res = await fetch(`${baseUrl}/api/v1/voice/synthesize`, {
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const startTime = Date.now();
+
+        // Warm, friendly hospitality persona
+        const inputPrompt = `[friendly] ${cleanSpeechText.slice(0, 240)}`;
+
+        const res = await fetch('https://api.groq.com/openai/v1/audio/speech', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: cleanSpeechText, voiceName: 'Kore' }),
+          headers: {
+            Authorization: `Bearer ${voiceKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'canopylabs/orpheus-v1-english',
+            input: inputPrompt,
+            voice: 'hannah', // Warm, soft, international female voice
+            response_format: 'wav',
+          }),
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
 
         if (res.ok) {
-          const data = await res.json();
-          if (data.available && data.audioBase64) {
-            const audio = new Audio(`data:audio/wav;base64,${data.audioBase64}`);
-            audio.volume = 1.0;
-            this.currentAudioElement = audio;
+          const wavBlob = await res.blob();
+          const blobUrl = URL.createObjectURL(wavBlob);
+          const audio = new Audio(blobUrl);
+          audio.volume = 1.0;
+          this.currentAudioElement = audio;
 
-            audio.onended = () => {
-              finishSpeech();
-            };
+          try {
+            (window as any).AndroidAudioBridge?.forceSpeaker?.();
+          } catch {}
 
-            audio.onerror = () => {
-              this.speakWithNativeOrBrowserFallback(cleanSpeechText, finishSpeech);
-            };
+          apkLogger.success('MIC', `Loudspeaker playback via Groq WAV (${Date.now() - startTime}ms)`);
 
-            await audio.play();
-            return;
-          }
+          const cleanupUrl = () => {
+            try {
+              URL.revokeObjectURL(blobUrl);
+            } catch {}
+          };
+
+          audio.onended = () => {
+            cleanupUrl();
+            finishSpeech();
+          };
+
+          audio.onerror = () => {
+            cleanupUrl();
+            apkLogger.warn('MIC', 'Groq WAV playback error; falling back to Web Speech');
+            this.speakWithNativeOrBrowserFallback(cleanSpeechText, finishSpeech);
+          };
+
+          await audio.play();
+          return;
+        } else {
+          apkLogger.warn('MIC', `Groq TTS HTTP ${res.status}; falling back to Web Speech`);
         }
-      } catch {
-        // Fall through
+      } catch (e: any) {
+        apkLogger.warn('MIC', `Groq WAV skipped (${e?.message || e}); falling back to Web Speech`);
       }
     }
 

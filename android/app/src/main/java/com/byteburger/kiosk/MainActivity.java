@@ -142,6 +142,18 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
                 return false;
             }
 
+            // Verify if the Android OS has ANY valid TTS voice packages installed
+            try {
+                Set<Voice> voices = nativeTts.getVoices();
+                if (voices == null || voices.isEmpty()) {
+                    Log.w(TAG, "No TTS voice data packages installed in Android OS. Falling back to cloud audio.");
+                    return false;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Voice check error: " + e.getMessage());
+                return false;
+            }
+
             runOnUiThread(() -> {
                 try {
                     forceLoudspeakerMode();

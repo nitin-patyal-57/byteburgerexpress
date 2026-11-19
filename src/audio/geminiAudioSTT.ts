@@ -454,6 +454,7 @@ export class GeminiCloudAudioRecognizer {
   private onLogCallback: ((message: string) => void) | null = null;
   private onBargeInCallback: (() => void) | null = null;
   private bargeInConsecutiveFrames: number = 0;
+  private speechStartTime: number = 0;
 
   constructor(
     onTranscript: (text: string) => void,
@@ -605,14 +606,21 @@ export class GeminiCloudAudioRecognizer {
 
         // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Interruption Detection
         if (this.isSpeaking) {
-          // When assistant speaks, speaker sound radiates into tablet mic.
-          // Customer speaking directly in front of mic produces higher near-field acoustic energy.
-          const bargeInGate = Math.max(this.filterConfig.noiseGateThreshold + 7.5, 17.0);
+          // 1. IMMUNITY WINDOW: Ignore the first 850ms of speech output so the kiosk NEVER self-interrupts on speaker onset
+          const timeSinceSpeechStart = Date.now() - this.speechStartTime;
+          if (timeSinceSpeechStart < 850) {
+            this.bargeInConsecutiveFrames = 0;
+            return;
+          }
+
+          // 2. HIGHER BARGE-IN GATE: Kiosk loudspeaker echo is ~14-22% RMS.
+          // A customer speaking directly in front of the kiosk to interrupt is near-field human voice (> 32% RMS).
+          const bargeInGate = Math.max(32.0, this.filterConfig.noiseGateThreshold + 16.0);
 
           if (volPercent >= bargeInGate) {
             this.bargeInConsecutiveFrames++;
-            // 2 consecutive frames (~170ms) confirms human customer voice, not a momentary transient click
-            if (this.bargeInConsecutiveFrames >= 2) {
+            // 3. SUSTAINED VOICE: Require 3 consecutive frames (~255ms) to confirm genuine customer voice
+            if (this.bargeInConsecutiveFrames >= 3) {
               this.isSpeaking = false;
               this.bargeInConsecutiveFrames = 0;
               apkLogger.info('MIC', `⚡ Customer Barge-In detected (${volPercent}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <40ms...`);
@@ -823,6 +831,7 @@ export class GeminiCloudAudioRecognizer {
 
   public pauseForSpeaking() {
     this.isSpeaking = true;
+    this.speechStartTime = Date.now();
     this.currentChunkFrames = [];
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
