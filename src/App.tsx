@@ -325,7 +325,7 @@ export default function App() {
             if (isMicActiveRef.current || globalAudioManager.getIsListening()) {
               globalAudioManager.resumeListening(0);
             }
-          }, 1000);
+          }, 200);
         } else {
           setVoiceState('IDLE');
         }

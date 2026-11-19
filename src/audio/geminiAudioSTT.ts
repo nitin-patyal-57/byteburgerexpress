@@ -631,24 +631,25 @@ export class GeminiCloudAudioRecognizer {
 
         // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Interruption Detection
         if (this.isSpeaking) {
-          // 1. IMMUNITY WINDOW: Minimum 1200ms immunity window so speech starts and establishes without any interruption risk
+          // 1. IMMUNITY WINDOW: 280ms to ignore initial DAC switch / audio player onset
           const timeSinceSpeechStart = Date.now() - this.speechStartTime;
-          if (timeSinceSpeechStart < 1200) {
+          if (timeSinceSpeechStart < 280) {
             this.bargeInConsecutiveFrames = 0;
             return;
           }
 
-          // 2. HIGH BARGE-IN GATE: Kiosk loudspeaker echo is ~16-28% RMS.
-          // True customer interruption right in front of the kiosk mic is near-field human speech (> 46% RMS).
-          const bargeInGate = Math.max(46.0, this.filterConfig.noiseGateThreshold + 24.0);
+          // 2. SENSITIVE & RELIABLE BARGE-IN GATE:
+          // Kiosk speaker acoustic bleed at the mic is ~10-15% RMS.
+          // True customer interruption right in front of the kiosk is ~20-35% RMS.
+          const bargeInGate = Math.max(20.0, this.filterConfig.noiseGateThreshold + 10.0);
 
           if (rawVol >= bargeInGate) {
             this.bargeInConsecutiveFrames++;
-            // 3. SUSTAINED VOICE: Require 4 consecutive frames (~340ms) of sustained human vocal energy
-            if (this.bargeInConsecutiveFrames >= 4) {
+            // 3. SUSTAINED VOICE: Require 2 consecutive frames (~170ms) to confirm human vocal syllable
+            if (this.bargeInConsecutiveFrames >= 2) {
               this.isSpeaking = false;
               this.bargeInConsecutiveFrames = 0;
-              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <40ms...`);
+              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <20ms...`);
 
               // Trigger immediate speech cancellation in audioManager
               if (this.onBargeInCallback) {
@@ -662,7 +663,7 @@ export class GeminiCloudAudioRecognizer {
               this.chunkSpeechDetected = true;
               this.lastSpeechTime = Date.now();
               this.onStateCallback?.('LISTENING');
-              this.onInterimCallback?.('Listening to your interruption...');
+              this.onInterimCallback?.('⚡ Interrupted — Listening to you...');
             }
           } else {
             this.bargeInConsecutiveFrames = 0;
@@ -670,7 +671,7 @@ export class GeminiCloudAudioRecognizer {
           return;
         }
 
-        // Track peak volume in current 5-second chunk
+        // Track peak volume in current chunk
         if (volPercent > this.chunkPeakVolume) {
           this.chunkPeakVolume = volPercent;
         }
@@ -701,26 +702,26 @@ export class GeminiCloudAudioRecognizer {
           return;
         }
 
-        // Continuous 5-Second Periodic Chunk Engine:
+        // Real-Time Conversational Endpointing Engine (< 400ms pause for instant response):
         const now = Date.now();
         const chunkElapsed = now - this.chunkStartTime;
 
         // Commit condition:
-        // 1. Full 5-second chunk reached (5000ms), OR
-        // 2. Speech finished early: speech was detected, followed by >= 750ms of silence, and chunk is at least 1.5s
-        const speechFinishedEarly =
+        // 1. Natural conversational pause: customer spoke and then paused for >= 380ms (with at least 350ms of audio recorded)
+        // 2. Snappy streaming boundary: 2500ms cap (prevents long sentences from waiting)
+        const speechFinished =
           this.chunkSpeechDetected &&
           this.lastSpeechTime > 0 &&
-          now - this.lastSpeechTime >= 750 &&
-          chunkElapsed >= 1500;
+          now - this.lastSpeechTime >= 380 &&
+          chunkElapsed >= 350;
 
-        const is5SecondBoundary = chunkElapsed >= 5000;
+        const isMaxBoundary = chunkElapsed >= 2500;
 
-        if (is5SecondBoundary || speechFinishedEarly) {
+        if (isMaxBoundary || speechFinished) {
           const framesToProcess = [...this.currentChunkFrames];
           const hadSpeech = this.chunkSpeechDetected || this.chunkPeakVolume >= effectiveGate;
 
-          // Start next 5-second chunk immediately (preserve 2 frames ~170ms overlap)
+          // Start next chunk immediately (preserve 2 frames ~170ms overlap)
           this.currentChunkFrames = this.currentChunkFrames.slice(-2);
           this.chunkStartTime = now;
           this.chunkPeakVolume = 0;
@@ -746,7 +747,7 @@ export class GeminiCloudAudioRecognizer {
 
     this.isTranscribing = true;
     this.onStateCallback?.('THINKING');
-    this.onInterimCallback?.('Checking order with Gemini...');
+    this.onInterimCallback?.('⚡ Processing order...');
 
     try {
       let totalLength = 0;
@@ -764,7 +765,7 @@ export class GeminiCloudAudioRecognizer {
       const sampleRate = this.audioCtx?.sampleRate || 48000;
       const durationSec = (totalLength / sampleRate).toFixed(1);
 
-      if (totalLength < sampleRate * 0.3) {
+      if (totalLength < sampleRate * 0.25) {
         this.isTranscribing = false;
         this.onInterimCallback?.('');
         if (this.isListening && !this.isSpeaking) {
@@ -773,7 +774,7 @@ export class GeminiCloudAudioRecognizer {
         return;
       }
 
-      this.onLogCallback?.(`Analyzing ${durationSec}s chunk with Gemini 1.5 Flash...`);
+      this.onLogCallback?.(`Analyzing ${durationSec}s chunk with Groq Whisper Turbo...`);
 
       const base64Wav = encodePcmToWavBase64(merged, sampleRate);
       const text = await transcribeAudioWithGemini(base64Wav);

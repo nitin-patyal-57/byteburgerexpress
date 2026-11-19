@@ -411,11 +411,6 @@ export class AudioManager {
       };
 
       this.recognition.onresult = (event: any) => {
-        // On Android mobile, ignore microphone pickup while assistant TTS is actively playing out of phone speaker
-        if (this.isAndroidMobile && this.isSpeaking) {
-          return;
-        }
-
         const finalSegments: string[] = [];
         const interimSegments: string[] = [];
 
@@ -432,8 +427,8 @@ export class AudioManager {
         const finalTranscript = deduplicateAndroidTranscript(finalSegments);
         const interimTranscript = deduplicateAndroidTranscript(interimSegments);
 
-        // Sub-40ms BARGE-IN (Desktop with headset/AEC): If customer speaks while assistant is speaking, halt immediately
-        if (!this.isAndroidMobile && (interimTranscript || finalTranscript) && this.isSpeaking) {
+        // Sub-40ms BARGE-IN: If customer speaks while assistant is speaking, halt immediately
+        if ((interimTranscript || finalTranscript) && this.isSpeaking) {
           this.flushImmediate();
           this.logRCA('BARGE_IN', 'Customer barge-in detected; flushed assistant speech buffer');
           if (this.onBargeInCallback) {
@@ -797,22 +792,11 @@ export class AudioManager {
     );
 
     try {
-      // 1. Primary: Gemini Cloud Audio Recognizer (Near-Field Acoustic Biquad Filtering + RMS Noise Gate + 5-Second Periodic Slicing)
+      // 1. Primary: Cloud Audio Recognizer (Groq Whisper Turbo LPU, Sub-400ms VAD, Two-Way Interruption)
       const geminiSuccess = await this.startGeminiCloudRecognizer();
       if (geminiSuccess) {
-        // Also run Web Speech API in parallel as immediate local fallback if supported
-        if (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) {
-          if (!this.recognition) {
-            this.initRecognition();
-          }
-          if (this.recognition) {
-            try {
-              this.recognition.start();
-            } catch {
-              // already running or transitioning
-            }
-          }
-        }
+        // High-speed Groq Whisper pipeline successfully active.
+        // Do NOT run Web Speech API in parallel on Android to prevent ALSA driver conflicts & audio ducking.
         return true;
       }
 
@@ -1247,13 +1231,13 @@ export class AudioManager {
       onEnd?.();
 
       if (this.isListening) {
-        // 400ms acoustic settling delay after assistant speech finishes before mic auto-resumes
+        // 200ms acoustic settling delay after assistant speech finishes before mic auto-resumes
         // Prevents speaker echo tails in kiosk chassis from triggering false voice activity
         setTimeout(() => {
           if (this.isListening && !this.isSpeaking) {
             this.resumeListening(0);
           }
-        }, 400);
+        }, 200);
       } else {
         if (this.onStateChangeCallback) {
           this.onStateChangeCallback('IDLE');
@@ -1332,7 +1316,7 @@ export class AudioManager {
           const wavBlob = await res.blob();
           const blobUrl = URL.createObjectURL(wavBlob);
           const audio = new Audio(blobUrl);
-          audio.volume = 1.0;
+          audio.volume = 0.88;
           this.currentAudioElement = audio;
 
           try {
