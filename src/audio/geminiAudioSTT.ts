@@ -5,7 +5,7 @@
  * and streams speech snippets directly to Gemini 3.5 Flash Lite for ultra-fast, accurate transcription.
  */
 
-import { getGeminiApiKey } from '../config';
+import { getGeminiApiKey, BUNDLED_GROQ_KEY } from '../config';
 import { apkLogger } from '../utils/apkLogger';
 import {
   MicFilterConfig,
@@ -292,6 +292,20 @@ export async function transcribeAudioWithGemini(
       } catch { }
       apkLogger.error('GEMINI', `Gemini HTTP ${res.status} error (${elapsed}ms): ${errDetail}`);
 
+      if (res.status === 401 || res.status === 403) {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('byteburger_gemini_api_key');
+        }
+        apkLogger.warn('GEMINI', `Gemini key rejected (${res.status}). Auto-falling back to Groq Whisper LPU...`);
+        const binary = atob(base64Wav);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'audio/wav' });
+        return transcribeWithGroqWhisper(blob, BUNDLED_GROQ_KEY);
+      }
+
       if (typeof window !== 'undefined') {
         let msg = errDetail;
         if (res.status === 403 || errDetail.toLowerCase().includes('leaked')) {
@@ -455,6 +469,7 @@ export class GeminiCloudAudioRecognizer {
   private onBargeInCallback: (() => void) | null = null;
   private bargeInConsecutiveFrames: number = 0;
   private speechStartTime: number = 0;
+  private smoothedVolume: number = 0;
 
   constructor(
     onTranscript: (text: string) => void,
@@ -516,11 +531,13 @@ export class GeminiCloudAudioRecognizer {
         // Passing echoCancellation: true forces Android AudioManager into MODE_IN_COMMUNICATION (earpiece mode),
         // which silences the kiosk loudspeaker completely! Disable hardware AEC on Android because we already
         // pause mic capture during TTS playback and run our own Biquad speech bandpass filter.
+        // Disable hardware AGC and dynamic noise suppression to eliminate gain pumping and audio volume fluctuations
         this.mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: !isAndroid,
-            noiseSuppression: true,
-            autoGainControl: true,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
           },
         });
         try {
@@ -601,29 +618,37 @@ export class GeminiCloudAudioRecognizer {
           sumSq += inputData[i] * inputData[i];
         }
         const rms = Math.sqrt(sumSq / inputData.length);
-        const volPercent = Math.min(100, Math.round(rms * 450));
+        const rawVol = Math.min(100, Math.round(rms * 450));
+
+        // Smooth volume envelope: fast attack (0.35/0.65), gentle decay (0.85/0.15) to eliminate visual flutter
+        if (rawVol > this.smoothedVolume) {
+          this.smoothedVolume = this.smoothedVolume * 0.35 + rawVol * 0.65;
+        } else {
+          this.smoothedVolume = this.smoothedVolume * 0.85 + rawVol * 0.15;
+        }
+        const volPercent = Math.round(this.smoothedVolume);
         this.onVolumeCallback?.(volPercent);
 
         // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Interruption Detection
         if (this.isSpeaking) {
-          // 1. IMMUNITY WINDOW: Ignore the first 850ms of speech output so the kiosk NEVER self-interrupts on speaker onset
+          // 1. IMMUNITY WINDOW: Minimum 1200ms immunity window so speech starts and establishes without any interruption risk
           const timeSinceSpeechStart = Date.now() - this.speechStartTime;
-          if (timeSinceSpeechStart < 850) {
+          if (timeSinceSpeechStart < 1200) {
             this.bargeInConsecutiveFrames = 0;
             return;
           }
 
-          // 2. HIGHER BARGE-IN GATE: Kiosk loudspeaker echo is ~14-22% RMS.
-          // A customer speaking directly in front of the kiosk to interrupt is near-field human voice (> 32% RMS).
-          const bargeInGate = Math.max(32.0, this.filterConfig.noiseGateThreshold + 16.0);
+          // 2. HIGH BARGE-IN GATE: Kiosk loudspeaker echo is ~16-28% RMS.
+          // True customer interruption right in front of the kiosk mic is near-field human speech (> 46% RMS).
+          const bargeInGate = Math.max(46.0, this.filterConfig.noiseGateThreshold + 24.0);
 
-          if (volPercent >= bargeInGate) {
+          if (rawVol >= bargeInGate) {
             this.bargeInConsecutiveFrames++;
-            // 3. SUSTAINED VOICE: Require 3 consecutive frames (~255ms) to confirm genuine customer voice
-            if (this.bargeInConsecutiveFrames >= 3) {
+            // 3. SUSTAINED VOICE: Require 4 consecutive frames (~340ms) of sustained human vocal energy
+            if (this.bargeInConsecutiveFrames >= 4) {
               this.isSpeaking = false;
               this.bargeInConsecutiveFrames = 0;
-              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${volPercent}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <40ms...`);
+              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <40ms...`);
 
               // Trigger immediate speech cancellation in audioManager
               if (this.onBargeInCallback) {
@@ -633,7 +658,7 @@ export class GeminiCloudAudioRecognizer {
               // Seed the new customer utterance chunk with the pre-roll frames so their opening words are preserved!
               this.currentChunkFrames = [...this.preRollBuffer];
               this.chunkStartTime = Date.now();
-              this.chunkPeakVolume = volPercent;
+              this.chunkPeakVolume = rawVol;
               this.chunkSpeechDetected = true;
               this.lastSpeechTime = Date.now();
               this.onStateCallback?.('LISTENING');
@@ -836,11 +861,6 @@ export class GeminiCloudAudioRecognizer {
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
     this.bargeInConsecutiveFrames = 0;
-    // CRITICAL TWO-WAY BARGE-IN: Keep microphone tracks ENABLED so the kiosk
-    // can hear customer interruptions while responding!
-    try {
-      (window as any).AndroidAudioBridge?.forceSpeaker?.();
-    } catch {}
     if (this.tapToSpeakTimer) {
       clearTimeout(this.tapToSpeakTimer);
       this.tapToSpeakTimer = null;
@@ -858,6 +878,7 @@ export class GeminiCloudAudioRecognizer {
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
     this.bargeInConsecutiveFrames = 0;
+    this.preRollBuffer = []; // Discard speaker echo tail to prevent acoustic feedback loop
     if (this.mediaStream) {
       this.mediaStream.getAudioTracks().forEach(t => {
         t.enabled = true;

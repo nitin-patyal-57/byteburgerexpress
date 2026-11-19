@@ -268,8 +268,9 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
         try {
             AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             if (am != null) {
-                am.setMode(AudioManager.MODE_NORMAL);
-                am.setSpeakerphoneOn(true);
+                if (am.getMode() != AudioManager.MODE_NORMAL) {
+                    am.setMode(AudioManager.MODE_NORMAL);
+                }
                 am.setMicrophoneMute(false);
             }
         } catch (Exception ignored) {

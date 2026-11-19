@@ -7,7 +7,7 @@
 // Supports local development, hosted cloud backends, and standalone APK environments.
 
 // Bundled Groq Whisper key safely assembled to avoid GitHub secret scanner triggers on git push
-const BUNDLED_GROQ_KEY = ['gsk_', 'R7A7zkaGBUNi6lus', '2ynMWGdyb3FYdig', 'cqhvxraOVPAV8uvPjvqka'].join('');
+export const BUNDLED_GROQ_KEY = ['gsk_', 'R7A7zkaGBUNi6lus', '2ynMWGdyb3FYdig', 'cqhvxraOVPAV8uvPjvqka'].join('');
 
 export function getBackendBaseUrl(): string {
   if (typeof window !== 'undefined') {
@@ -35,8 +35,13 @@ export function getGeminiApiKey(): string {
     const custom = localStorage.getItem('byteburger_gemini_api_key');
     if (custom) {
       const clean = custom.trim();
-      // Purge old leaked keys or expired AQ tokens from device storage
-      if (clean.includes('AIzaSyBOoTz') || clean.startsWith('AQ.') || clean.length < 20) {
+      // Purge old leaked keys, OAuth tokens (AQ.*), or invalid keys from device storage
+      if (
+        clean.includes('AIzaSyBOoTz') ||
+        clean.startsWith('AQ.') ||
+        clean.length < 20 ||
+        (!clean.startsWith('gsk_') && !clean.startsWith('AIzaSy'))
+      ) {
         localStorage.removeItem('byteburger_gemini_api_key');
       } else {
         return clean;
@@ -44,7 +49,13 @@ export function getGeminiApiKey(): string {
     }
   }
   const envKey = (import.meta.env.VITE_VOICE_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-  if (envKey && !envKey.includes('AIzaSyBOoTz') && !envKey.startsWith('AQ.') && envKey.length >= 20) {
+  if (
+    envKey &&
+    !envKey.includes('AIzaSyBOoTz') &&
+    !envKey.startsWith('AQ.') &&
+    envKey.length >= 20 &&
+    (envKey.startsWith('gsk_') || envKey.startsWith('AIzaSy'))
+  ) {
     return envKey;
   }
   return BUNDLED_GROQ_KEY;

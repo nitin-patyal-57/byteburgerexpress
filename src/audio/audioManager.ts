@@ -1002,15 +1002,6 @@ export class AudioManager {
     }
 
     if (!this.analyser) {
-      // On Android mobile (where SpeechRecognition holds exclusive mic access), provide reactive activity pulse
-      if (this.isListening && !this.isSpeaking) {
-        const t = Date.now() / 160;
-        const base = 24 + Math.round(Math.sin(t) * 14 + Math.cos(t * 1.7) * 10);
-        return {
-          volume: Math.max(10, Math.min(85, base)),
-          frequencyData: [base, base + 12, base + 20, base - 5, base + 15, base, base - 8, base + 5],
-        };
-      }
       return { volume: 0, frequencyData: [0, 0, 0, 0, 0, 0, 0, 0] };
     }
 
@@ -1256,12 +1247,13 @@ export class AudioManager {
       onEnd?.();
 
       if (this.isListening) {
-        // Quick 200ms delay after assistant speech finishes before mic auto-resumes
+        // 400ms acoustic settling delay after assistant speech finishes before mic auto-resumes
+        // Prevents speaker echo tails in kiosk chassis from triggering false voice activity
         setTimeout(() => {
           if (this.isListening && !this.isSpeaking) {
             this.resumeListening(0);
           }
-        }, 200);
+        }, 400);
       } else {
         if (this.onStateChangeCallback) {
           this.onStateChangeCallback('IDLE');
