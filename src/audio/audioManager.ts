@@ -1014,9 +1014,12 @@ export class AudioManager {
 
     if (this.currentAudioElement) {
       try {
+        // Detach listeners before pausing/clearing src to prevent triggering onerror fallback
+        this.currentAudioElement.onerror = null;
+        this.currentAudioElement.onended = null;
         this.currentAudioElement.pause();
         this.currentAudioElement.currentTime = 0;
-        this.currentAudioElement.src = '';
+        this.currentAudioElement.removeAttribute('src');
       } catch {
         // ignore
       }
@@ -1333,11 +1336,13 @@ export class AudioManager {
 
           audio.onended = () => {
             cleanupUrl();
+            if (!this.isSpeaking) return;
             finishSpeech();
           };
 
           audio.onerror = () => {
             cleanupUrl();
+            if (!this.isSpeaking) return; // Speech was cancelled by barge-in or user; do NOT restart fallback speech!
             apkLogger.warn('MIC', 'Groq WAV playback error; falling back to Web Speech');
             this.speakWithNativeOrBrowserFallback(cleanSpeechText, finishSpeech);
           };
@@ -1359,8 +1364,13 @@ export class AudioManager {
   private async speakWithNativeOrBrowserFallback(text: string, finishSpeech: () => void) {
     if (Capacitor.isNativePlatform()) {
       try {
-        const supported = await CapTextToSpeech.getSupportedVoices();
-        const hasNativeVoices = Array.isArray(supported?.voices) && supported.voices.length > 0;
+        let hasNativeVoices = false;
+        try {
+          const supported = await CapTextToSpeech.getSupportedVoices();
+          hasNativeVoices = Array.isArray(supported?.voices) && supported.voices.length > 0;
+        } catch {
+          hasNativeVoices = false;
+        }
         if (hasNativeVoices) {
           let spoke = false;
           const speakPromise = CapTextToSpeech.speak({
@@ -1381,11 +1391,9 @@ export class AudioManager {
             return;
           }
           apkLogger.warn('MIC', 'Native Android TTS timed out with no audio; falling back to Web Speech');
-        } else {
-          apkLogger.warn('MIC', 'No Android OS TTS engine voices installed on device; using Web Speech fallback');
         }
       } catch (e: any) {
-        apkLogger.warn('MIC', `Native Capacitor TTS error: ${e?.message || e}`);
+        // Ignore native tts plugin failure on bare AOSP POS
       }
     }
 
