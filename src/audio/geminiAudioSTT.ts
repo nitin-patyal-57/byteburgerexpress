@@ -146,7 +146,7 @@ export function encodePcmToWavBlob(samples: Float32Array, inputSampleRate: numbe
 /**
  * Ultra-fast Groq Whisper Large v3 Turbo transcription (150ms-290ms latency)
  */
-async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise<string> {
+async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string, abortSignal?: AbortSignal): Promise<string> {
   const form = new FormData();
   form.append('file', wavBlob, 'audio.wav');
   form.append('model', 'whisper-large-v3-turbo');
@@ -156,6 +156,9 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12000);
+  if (abortSignal) {
+    abortSignal.addEventListener('abort', () => controller.abort());
+  }
   const startTime = Date.now();
   const keyDisplay = apiKey.slice(0, 8) + '...' + apiKey.slice(-4);
   apkLogger.info('GEMINI', `Sending audio to Groq Whisper LPU (Key: ${keyDisplay})...`);
@@ -174,6 +177,7 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise
     const elapsed = Date.now() - startTime;
 
     if (!res.ok) {
+      if (abortSignal?.aborted) return '';
       let errDetail = `HTTP ${res.status}`;
       try {
         const errJson = await res.json();
@@ -200,6 +204,7 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise
     return clean;
   } catch (err: any) {
     clearTimeout(timeoutId);
+    if (abortSignal?.aborted) return '';
     const isTimeout = err?.name === 'AbortError' || String(err?.message || '').includes('aborted');
     const msg = isTimeout ? 'Network timeout (>12s) on Groq' : (err?.message || err);
     apkLogger.error('GEMINI', `Groq Whisper fetch network error: ${msg}`);
@@ -209,7 +214,8 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string): Promise
 
 export async function transcribeAudioWithGemini(
   base64Wav: string,
-  apiKey: string = getGeminiApiKey()
+  apiKey: string = getGeminiApiKey(),
+  abortSignal?: AbortSignal
 ): Promise<string> {
   const cleanKey = (apiKey || '').trim();
   if (!cleanKey || cleanKey.length < 20 || cleanKey.includes('AIzaSyBOoTz')) {
@@ -232,7 +238,7 @@ export async function transcribeAudioWithGemini(
       bytes[i] = binary.charCodeAt(i);
     }
     const blob = new Blob([bytes], { type: 'audio/wav' });
-    return transcribeWithGroqWhisper(blob, cleanKey);
+    return transcribeWithGroqWhisper(blob, cleanKey, abortSignal);
   }
 
   // 2. Otherwise use Google Gemini Flash
@@ -470,6 +476,7 @@ export class GeminiCloudAudioRecognizer {
   private bargeInConsecutiveFrames: number = 0;
   private speechStartTime: number = 0;
   private smoothedVolume: number = 0;
+  private activeAbortController: AbortController | null = null;
 
   constructor(
     onTranscript: (text: string) => void,
@@ -631,17 +638,17 @@ export class GeminiCloudAudioRecognizer {
 
         // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Voice Interruption (like Gemini Live)
         if (this.isSpeaking) {
-          // 1. Immunity window: ignore first 350ms of audio onset
+          // 1. Brief onset immunity (200ms) to ignore initial audio transient
           const timeSinceSpeechStart = Date.now() - this.speechStartTime;
-          if (timeSinceSpeechStart < 350) {
+          if (timeSinceSpeechStart < 200) {
             this.bargeInConsecutiveFrames = 0;
             return;
           }
 
           // 2. Sensitive Barge-In Gate:
-          // With assistant volume calibrated to 0.58, speaker bleed at the mic peaks around 15-20% RMS.
-          // Near-field human voice (standing/holding device) directly in front reaches 35-65% RMS.
-          const bargeInGate = Math.max(32.0, this.filterConfig.noiseGateThreshold + 18.0);
+          // Human vocal register is boosted by peakingFilter (1.8 kHz).
+          // 24.0% RMS reliably captures direct customer speech while assistant speaks.
+          const bargeInGate = Math.max(24.0, this.filterConfig.noiseGateThreshold + 8.0);
 
           if (rawVol >= bargeInGate) {
             this.bargeInConsecutiveFrames++;
@@ -651,7 +658,14 @@ export class GeminiCloudAudioRecognizer {
               this.bargeInConsecutiveFrames = 0;
               apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <20ms...`);
 
-              // Trigger immediate speech cancellation in audioManager
+              // Abort any pending stale transcription from previous utterance
+              if (this.activeAbortController) {
+                try { this.activeAbortController.abort(); } catch {}
+                this.activeAbortController = null;
+              }
+              this.isTranscribing = false;
+
+              // Trigger immediate speech cancellation in audioManager & native hardware
               if (this.onBargeInCallback) {
                 this.onBargeInCallback();
               }
@@ -663,7 +677,7 @@ export class GeminiCloudAudioRecognizer {
               this.chunkSpeechDetected = true;
               this.lastSpeechTime = Date.now();
               this.onStateCallback?.('LISTENING');
-              this.onInterimCallback?.('⚡ Interrupted — Listening to you...');
+              this.onInterimCallback?.('⚡ Listening to your order...');
             }
           } else {
             this.bargeInConsecutiveFrames = 0;
@@ -702,20 +716,20 @@ export class GeminiCloudAudioRecognizer {
           return;
         }
 
-        // Real-Time Conversational Endpointing Engine (< 400ms pause for instant response):
+        // Real-Time Conversational Endpointing Engine:
+        // 1. Natural conversational pause: customer finished their sentence and paused for >= 650ms
+        // 2. Minimum utterance duration >= 450ms (prevents false triggers on lip smacks/coughs)
+        // 3. Streaming boundary cap: 3500ms (ensures compound sentences are processed promptly)
         const now = Date.now();
         const chunkElapsed = now - this.chunkStartTime;
 
-        // Commit condition:
-        // 1. Natural conversational pause: customer spoke and then paused for >= 380ms (with at least 350ms of audio recorded)
-        // 2. Snappy streaming boundary: 2500ms cap (prevents long sentences from waiting)
         const speechFinished =
           this.chunkSpeechDetected &&
           this.lastSpeechTime > 0 &&
-          now - this.lastSpeechTime >= 380 &&
-          chunkElapsed >= 350;
+          now - this.lastSpeechTime >= 650 &&
+          chunkElapsed >= 450;
 
-        const isMaxBoundary = chunkElapsed >= 2500;
+        const isMaxBoundary = chunkElapsed >= 3500;
 
         if (isMaxBoundary || speechFinished) {
           const framesToProcess = [...this.currentChunkFrames];
@@ -728,7 +742,13 @@ export class GeminiCloudAudioRecognizer {
           this.chunkSpeechDetected = false;
           this.lastSpeechTime = 0;
 
-          if (hadSpeech && !this.isTranscribing) {
+          if (hadSpeech) {
+            // If previous transcription is still in flight, abort it because customer just spoke a newer command!
+            if (this.isTranscribing && this.activeAbortController) {
+              try { this.activeAbortController.abort(); } catch {}
+              this.activeAbortController = null;
+              this.isTranscribing = false;
+            }
             this.processChunk(framesToProcess);
           }
         }
@@ -743,9 +763,12 @@ export class GeminiCloudAudioRecognizer {
   }
 
   private async processChunk(frames: Float32Array[]) {
-    if (frames.length === 0 || this.isTranscribing) return;
+    if (frames.length === 0) return;
 
     this.isTranscribing = true;
+    this.activeAbortController = new AbortController();
+    const currentController = this.activeAbortController;
+
     this.onStateCallback?.('THINKING');
     this.onInterimCallback?.('⚡ Processing order...');
 
@@ -777,10 +800,15 @@ export class GeminiCloudAudioRecognizer {
       this.onLogCallback?.(`Analyzing ${durationSec}s chunk with Groq Whisper Turbo...`);
 
       const base64Wav = encodePcmToWavBase64(merged, sampleRate);
-      const text = await transcribeAudioWithGemini(base64Wav);
+      const text = await transcribeAudioWithGemini(base64Wav, undefined, currentController.signal);
+
+      // If this request was superseded by a newer barge-in/chunk, ignore stale text
+      if (currentController.signal.aborted) {
+        return;
+      }
 
       if (text && this.isListening) {
-        this.onLogCallback?.(`Gemini 5s chunk recognized: "${text}"`);
+        this.onLogCallback?.(`Whisper recognized: "${text}"`);
         this.onInterimCallback?.('');
         this.onTranscriptCallback?.(text);
       } else {
@@ -790,13 +818,17 @@ export class GeminiCloudAudioRecognizer {
         }
       }
     } catch (e: any) {
+      if (currentController.signal.aborted) return;
       this.onLogCallback?.(`Chunk recognition error: ${e?.message || e}`);
       this.onInterimCallback?.('');
       if (this.isListening && !this.isSpeaking) {
         this.onStateCallback?.('LISTENING');
       }
     } finally {
-      this.isTranscribing = false;
+      if (this.activeAbortController === currentController) {
+        this.isTranscribing = false;
+        this.activeAbortController = null;
+      }
     }
   }
 

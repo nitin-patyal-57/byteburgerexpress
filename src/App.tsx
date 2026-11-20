@@ -78,7 +78,7 @@ export default function App() {
   const toolEngineRef = useRef<ToolExecutionEngine>(new ToolExecutionEngine(globalOrderStore));
   const inactivityTimerRef = useRef<any>(null);
   const isMicActiveRef = useRef<boolean>(false);
-  const processCustomerUtteranceRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const processCustomerUtteranceRef = useRef<(text: string) => Promise<void>>(async () => { });
 
   useEffect(() => {
     isMicActiveRef.current = isMicActive;
@@ -180,7 +180,8 @@ export default function App() {
           } else {
             data = parseDeterministicIntent(normalizedText, currentOrder);
           }
-        } catch {
+        } catch (err: any) {
+          apkLogger.warn('SYSTEM', `Backend voice/turn failed (${err?.message || err}); using local parser`);
           data = parseDeterministicIntent(normalizedText, currentOrder);
         }
       } else {
@@ -485,8 +486,8 @@ export default function App() {
           paymentMethod,
         }),
       });
-    } catch {
-      // ignore
+    } catch (err: any) {
+      apkLogger.warn('SYSTEM', `Order submit to kitchen failed: ${err?.message || err}`);
     }
   };
 

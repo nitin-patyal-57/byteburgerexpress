@@ -34,11 +34,11 @@ export const AdminPinDialog: React.FC<AdminPinDialogProps> = ({
       const nextPin = pin + num;
       setPin(nextPin);
       if (nextPin.length === 4) {
-        if (nextPin === correctPin || nextPin === '1234') {
+        if (nextPin === correctPin) {
           setIsUnlocked(true);
           setErrorMessage('');
         } else {
-          setErrorMessage('Invalid PIN. Use 2026 or 1234.');
+          setErrorMessage('Invalid PIN. Try again.');
           setTimeout(() => setPin(''), 800);
         }
       }
@@ -84,11 +84,10 @@ export const AdminPinDialog: React.FC<AdminPinDialogProps> = ({
               {[0, 1, 2, 3].map(i => (
                 <div
                   key={i}
-                  className={`w-3.5 h-3.5 rounded-full border transition-all ${
-                    pin.length > i
-                      ? 'bg-amber-400 border-amber-400 scale-110'
-                      : 'border-neutral-700 bg-neutral-950'
-                  }`}
+                  className={`w-3.5 h-3.5 rounded-full border transition-all ${pin.length > i
+                    ? 'bg-amber-400 border-amber-400 scale-110'
+                    : 'border-neutral-700 bg-neutral-950'
+                    }`}
                 />
               ))}
             </div>
@@ -154,9 +153,8 @@ export const AdminPinDialog: React.FC<AdminPinDialogProps> = ({
               <button
                 type="button"
                 onClick={() => onToggleAec(!aecEnabled)}
-                className={`w-12 h-6 rounded-full transition p-1 flex items-center ${
-                  aecEnabled ? 'bg-emerald-600 justify-end' : 'bg-neutral-800 justify-start'
-                }`}
+                className={`w-12 h-6 rounded-full transition p-1 flex items-center ${aecEnabled ? 'bg-emerald-600 justify-end' : 'bg-neutral-800 justify-start'
+                  }`}
               >
                 <div className="w-4 h-4 rounded-full bg-white shadow-md" />
               </button>
@@ -232,11 +230,10 @@ export const AdminPinDialog: React.FC<AdminPinDialogProps> = ({
                     key={s}
                     type="button"
                     onClick={() => onChangeInactivityLimit(s)}
-                    className={`py-1.5 rounded-xl border font-bold text-[11px] transition ${
-                      inactivityLimit === s
-                        ? 'bg-amber-500 text-neutral-950 border-amber-500'
-                        : 'bg-neutral-850 text-neutral-400 border-neutral-700 hover:text-white'
-                    }`}
+                    className={`py-1.5 rounded-xl border font-bold text-[11px] transition ${inactivityLimit === s
+                      ? 'bg-amber-500 text-neutral-950 border-amber-500'
+                      : 'bg-neutral-850 text-neutral-400 border-neutral-700 hover:text-white'
+                      }`}
                   >
                     {s}s
                   </button>

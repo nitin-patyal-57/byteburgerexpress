@@ -15,7 +15,25 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
+
+// CORS: the Capacitor app runs from https://localhost and calls this server cross-origin
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Kiosk-Token');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// Optional shared-secret check: set KIOSK_API_TOKEN on the server to require X-Kiosk-Token on /api/v1 routes
+app.use('/api/v1', (req, res, next) => {
+  const required = (process.env.KIOSK_API_TOKEN || '').trim();
+  if (required && req.header('X-Kiosk-Token') !== required) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+});
 
 // Initialize Google GenAI client (server-side only)
 const rawApiKey = (process.env.GEMINI_API_KEY || '').trim();
@@ -369,6 +387,12 @@ app.post('/api/v1/orders/submit', (req, res) => {
 
     if (!idempotencyKey) {
       return res.status(400).json({ error: 'idempotencyKey is required' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items must be a non-empty array' });
+    }
+    if (!Number.isInteger(totalMinorUnits) || totalMinorUnits < 0) {
+      return res.status(400).json({ error: 'totalMinorUnits must be a non-negative integer' });
     }
 
     if (processedOrders.has(idempotencyKey)) {

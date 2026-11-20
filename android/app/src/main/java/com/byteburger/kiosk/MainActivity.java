@@ -3,11 +3,14 @@ package com.byteburger.kiosk;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
@@ -18,6 +21,8 @@ import android.webkit.WebSettings;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.Locale;
 import java.util.Set;
 
@@ -30,6 +35,7 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
     private boolean ttsInitialized = false;
     private Voice indianFemaleVoice = null;
     private Voice hindiFemaleVoice = null;
+    private MediaPlayer mediaPlayer = null;
 
     @Override
     public void onInit(int status) {
@@ -70,6 +76,17 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
 
                 @Override
                 public void onError(String utteranceId) {
+                    runOnUiThread(() -> {
+                        if (bridge != null && bridge.getWebView() != null) {
+                            bridge.getWebView().evaluateJavascript(
+                                "window.dispatchEvent(new CustomEvent('native_speech_error'));", null
+                            );
+                        }
+                    });
+                }
+
+                @Override
+                public void onStop(String utteranceId, boolean interrupted) {
                     runOnUiThread(() -> {
                         if (bridge != null && bridge.getWebView() != null) {
                             bridge.getWebView().evaluateJavascript(
@@ -133,7 +150,79 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
                         nativeTts.stop();
                     } catch (Exception ignored) {}
                 }
+                if (mediaPlayer != null) {
+                    try {
+                        if (mediaPlayer.isPlaying()) {
+                            mediaPlayer.stop();
+                        }
+                        mediaPlayer.release();
+                    } catch (Exception ignored) {}
+                    mediaPlayer = null;
+                }
             });
+        }
+
+        /**
+         * Direct Native Hardware Audio Player for Groq WAV stream.
+         * Guarantees 100% crystal-clear loudspeaker output on bare AOSP Rockchip RK3568 POS tablets
+         * with zero dependency on WebView HTML5 audio policies or voice packs.
+         */
+        @JavascriptInterface
+        public boolean playWavAudio(String base64Wav) {
+            if (base64Wav == null || base64Wav.isEmpty()) return false;
+            try {
+                byte[] audioBytes = Base64.decode(base64Wav, Base64.DEFAULT);
+                File tempAudio = new File(getCacheDir(), "kiosk_voice.wav");
+                FileOutputStream fos = new FileOutputStream(tempAudio);
+                fos.write(audioBytes);
+                fos.close();
+
+                runOnUiThread(() -> {
+                    try {
+                        stopSpeaking();
+                        forceLoudspeakerMode();
+
+                        mediaPlayer = new MediaPlayer();
+                        mediaPlayer.setAudioAttributes(
+                            new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        );
+                        mediaPlayer.setDataSource(tempAudio.getAbsolutePath());
+                        mediaPlayer.setOnPreparedListener(mp -> {
+                            mp.setVolume(1.0f, 1.0f);
+                            mp.start();
+                        });
+                        mediaPlayer.setOnCompletionListener(mp -> {
+                            try { mp.release(); } catch (Exception ignored) {}
+                            mediaPlayer = null;
+                            if (bridge != null && bridge.getWebView() != null) {
+                                bridge.getWebView().evaluateJavascript(
+                                    "window.dispatchEvent(new CustomEvent('native_speech_ended'));", null
+                                );
+                            }
+                        });
+                        mediaPlayer.setOnErrorListener((mp, what, extra) -> {
+                            try { mp.release(); } catch (Exception ignored) {}
+                            mediaPlayer = null;
+                            if (bridge != null && bridge.getWebView() != null) {
+                                bridge.getWebView().evaluateJavascript(
+                                    "window.dispatchEvent(new CustomEvent('native_speech_ended'));", null
+                                );
+                            }
+                            return true;
+                        });
+                        mediaPlayer.prepareAsync();
+                    } catch (Exception e) {
+                        Log.e(TAG, "playWavAudio execution error: " + e.getMessage());
+                    }
+                });
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "playWavAudio decode error: " + e.getMessage());
+                return false;
+            }
         }
 
         @JavascriptInterface
@@ -154,25 +243,46 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
                 return false;
             }
 
+            // Pick a language the installed engine can ACTUALLY speak (data present).
+            // If none, return false so JS falls back to cloud audio instead of staying silent.
+            final Locale chosenLocale;
+            try {
+                boolean wantHindi = "hi-IN".equalsIgnoreCase(languageCode) ||
+                        text.matches(".*[\\u0900-\\u097F].*");
+                Locale[] candidates = wantHindi
+                        ? new Locale[]{new Locale("hi", "IN"), new Locale("en", "IN"), Locale.US, Locale.ENGLISH}
+                        : new Locale[]{new Locale("en", "IN"), Locale.US, Locale.UK, Locale.ENGLISH};
+                Locale found = null;
+                for (Locale c : candidates) {
+                    int r = nativeTts.isLanguageAvailable(c);
+                    if (r == TextToSpeech.LANG_AVAILABLE
+                            || r == TextToSpeech.LANG_COUNTRY_AVAILABLE
+                            || r == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE) {
+                        found = c;
+                        break;
+                    }
+                }
+                if (found == null) {
+                    Log.w(TAG, "TTS engine has no usable language data. Falling back to cloud audio.");
+                    return false;
+                }
+                chosenLocale = found;
+            } catch (Exception e) {
+                Log.w(TAG, "Language check error: " + e.getMessage());
+                return false;
+            }
+
             runOnUiThread(() -> {
                 try {
                     forceLoudspeakerMode();
                     nativeTts.stop();
 
-                    boolean isHindi = "hi-IN".equalsIgnoreCase(languageCode) ||
-                            text.matches(".*[\\u0900-\\u097F].*") ||
-                            text.toLowerCase().matches(".*\\b(namaste|swagat|shukriya|dhanyawad|aapka|bhai|chahiye|aur|hai|hain|kardo|kripya|batao|daal|paneer|tikki)\\b.*");
-
-                    if (isHindi) {
-                        nativeTts.setLanguage(new Locale("hi", "IN"));
-                        if (hindiFemaleVoice != null) {
-                            try { nativeTts.setVoice(hindiFemaleVoice); } catch (Exception ignored) {}
-                        }
-                    } else {
-                        nativeTts.setLanguage(new Locale("en", "IN"));
-                        if (indianFemaleVoice != null) {
-                            try { nativeTts.setVoice(indianFemaleVoice); } catch (Exception ignored) {}
-                        }
+                    nativeTts.setLanguage(chosenLocale);
+                    if ("hi".equals(chosenLocale.getLanguage()) && hindiFemaleVoice != null) {
+                        try { nativeTts.setVoice(hindiFemaleVoice); } catch (Exception ignored) {}
+                    } else if ("en".equals(chosenLocale.getLanguage())
+                            && "IN".equals(chosenLocale.getCountry()) && indianFemaleVoice != null) {
+                        try { nativeTts.setVoice(indianFemaleVoice); } catch (Exception ignored) {}
                     }
 
                     nativeTts.setPitch(pitch > 0 ? pitch : 1.15f);
@@ -180,10 +290,14 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
 
                     Bundle params = new Bundle();
                     params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
-                    params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 0.65f);
+                    params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f);
                     String utteranceId = "byteburger_utt_" + System.currentTimeMillis();
 
-                    nativeTts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+                    int rc = nativeTts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+                    if (rc != TextToSpeech.SUCCESS && bridge != null && bridge.getWebView() != null) {
+                        bridge.getWebView().evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('native_speech_error'));", null);
+                    }
                 } catch (Exception e) {
                     Log.w(TAG, "speakIndian execution error: " + e.getMessage());
                 }
@@ -234,7 +348,6 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
                         for (String r : resources) {
                             if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) {
                                 request.grant(resources);
-                                // Re-assert loudspeaker routing after mic permission grant
                                 forceLoudspeakerMode();
                                 return;
                             }
@@ -260,6 +373,12 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
                 nativeTts.shutdown();
             } catch (Exception ignored) {}
             nativeTts = null;
+        }
+        if (mediaPlayer != null) {
+            try {
+                mediaPlayer.release();
+            } catch (Exception ignored) {}
+            mediaPlayer = null;
         }
         super.onDestroy();
     }

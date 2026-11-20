@@ -58,17 +58,17 @@ export const FEMALE_PERSONAS: FemaleVoicePersona[] = [
 export interface VoiceRCALogEntry {
   timestamp: string;
   type:
-    | 'MIC_START'
-    | 'MIC_STOP'
-    | 'RECOGNITION_START'
-    | 'RECOGNITION_RESULT'
-    | 'RECOGNITION_ONEND'
-    | 'RECOGNITION_ERROR'
-    | 'RECOGNITION_RESTART'
-    | 'BARGE_IN'
-    | 'AUDIO_CTX_RESUME'
-    | 'WATCHDOG_INTERIM_FLUSH'
-    | 'WATCHDOG_REVIVAL';
+  | 'MIC_START'
+  | 'MIC_STOP'
+  | 'RECOGNITION_START'
+  | 'RECOGNITION_RESULT'
+  | 'RECOGNITION_ONEND'
+  | 'RECOGNITION_ERROR'
+  | 'RECOGNITION_RESTART'
+  | 'BARGE_IN'
+  | 'AUDIO_CTX_RESUME'
+  | 'WATCHDOG_INTERIM_FLUSH'
+  | 'WATCHDOG_REVIVAL';
   message: string;
   data?: any;
 }
@@ -102,8 +102,8 @@ export function isAndroidOrMobileDevice(userAgent?: string): boolean {
     userAgent !== undefined
       ? userAgent
       : typeof navigator !== 'undefined'
-      ? navigator.userAgent || ''
-      : '';
+        ? navigator.userAgent || ''
+        : '';
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
 }
 
@@ -230,7 +230,9 @@ export class AudioManager {
 
   constructor() {
     this.initVoiceCache();
-    this.initRecognition();
+    if (!Capacitor.isNativePlatform() && !this.isAndroidMobile) {
+      this.initRecognition();
+    }
     this.attachGlobalRCADiagnostic();
   }
 
@@ -265,17 +267,17 @@ export class AudioManager {
       audioContextState: this.audioCtx ? this.audioCtx.state : 'none',
       micTrackState: track
         ? {
-            enabled: track.enabled,
-            muted: track.muted,
-            readyState: track.readyState,
-          }
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+        }
         : this.isAndroidMobile && this.isListening
-        ? {
+          ? {
             enabled: true,
             muted: false,
             readyState: 'live (Android Native Speech HAL)',
           }
-        : null,
+          : null,
       lastTranscript: this.lastTranscript,
       lastTranscriptTime: this.lastTranscriptTime,
     };
@@ -537,61 +539,10 @@ export class AudioManager {
   }
 
   private async runNativeRecognitionLoop() {
-    if (!this.isListening || this.isSpeaking || this.isNativeRunning || this.geminiRecognizer) return;
-    this.isNativeRunning = true;
-    let consecutiveErrors = 0;
-
-    while (this.isListening && !this.isSpeaking) {
-      try {
-        this.recognitionState = 'ACTIVE';
-        if (this.onStateChangeCallback) {
-          this.onStateChangeCallback('LISTENING');
-        }
-
-        this.logRCA('RECOGNITION_START', 'Starting native speech recognition listening session');
-
-        const res: any = await CapSpeechRecognition.start({
-          language: 'en-IN',
-          maxResults: 1,
-          prompt: '',
-          partialResults: false,
-          popup: false,
-        });
-
-        consecutiveErrors = 0;
-        const matches: string[] = res?.matches || [];
-        const spokenText = matches.length > 0 ? matches[0].trim() : '';
-
-        if (spokenText && this.isListening && !this.isSpeaking) {
-          this.logRCA('RECOGNITION_RESULT', `Native speech recognized: "${spokenText}"`);
-          if (this.onTranscriptCallback) {
-            this.onTranscriptCallback(spokenText, false);
-          }
-          this.commitFinalTranscript(spokenText, 'native_speech_result');
-          // Order committed and sent to assistant TTS; break so assistant can speak cleanly
-          break;
-        }
-      } catch (err: any) {
-        consecutiveErrors++;
-        const errMsg = String(err?.message || err || '');
-        this.logRCA('RECOGNITION_ERROR', `Native recognition cycle ended: ${errMsg} (error #${consecutiveErrors})`);
-
-        // If native recognition repeatedly fails (e.g. Android Speech Recognition Service busy or crashed), fallback to Gemini Cloud STT!
-        if (consecutiveErrors >= 3 && !this.geminiRecognizer) {
-          this.logRCA('RECOGNITION_ERROR', 'Native recognition failed 3 times. Falling back to Gemini Cloud Audio Recognizer!');
-          this.isNativeAvailable = false;
-          this.isNativeRunning = false;
-          await this.startGeminiCloudRecognizer();
-          return;
-        }
-
-        // Backoff delay before restarting listening session (350ms, 700ms, etc.)
-        const backoffMs = Math.min(1500, 350 * consecutiveErrors);
-        await new Promise(r => setTimeout(r, backoffMs));
-      }
+    // Completely bypass CapSpeechRecognition on Android to prevent HAL driver conflicts & Google Speech toast
+    if (!this.geminiRecognizer) {
+      await this.startGeminiCloudRecognizer();
     }
-
-    this.isNativeRunning = false;
   }
 
   /**
@@ -806,24 +757,11 @@ export class AudioManager {
         return true;
       }
 
-      // 2. Native Capacitor fallback if Gemini recognizer could not start
-      if (Capacitor.isNativePlatform()) {
-        try {
-          const avail = await CapSpeechRecognition.available();
-          if (avail && avail.available) {
-            this.isNativeAvailable = true;
-            this.isListening = true;
-            this.recognitionState = 'ACTIVE';
-            this.onStateChangeCallback('LISTENING');
-            this.logRCA('MIC_START', 'Native Capacitor Speech Recognition active and listening');
-
-            // Launch continuous native recognition loop!
-            this.runNativeRecognitionLoop();
-            return true;
-          }
-        } catch {
-          this.isNativeAvailable = false;
-        }
+      // 2. Native Capacitor / Android fallback: retry Cloud Audio Recognizer after hardware permission check
+      if (Capacitor.isNativePlatform() || this.isAndroidMobile) {
+        apkLogger.info('MIC', 'Retrying Cloud Audio Recognizer after hardware permission check...');
+        await new Promise(r => setTimeout(r, 600));
+        return await this.startGeminiCloudRecognizer();
       }
 
       if (!this.audioCtx) {
@@ -1061,7 +999,7 @@ export class AudioManager {
     try {
       try {
         (window as any).AndroidAudioBridge?.forceSpeaker?.();
-      } catch {}
+      } catch { }
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioCtx) return;
@@ -1070,7 +1008,7 @@ export class AudioManager {
       }
       const ctx = this.audioCtx;
       if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
+        ctx.resume().catch(() => { });
       }
 
       const now = ctx.currentTime;
@@ -1195,9 +1133,10 @@ export class AudioManager {
   /**
    * Speaks the response with an authentic Indian female voice (Hindi, English & mixed Hinglish).
    * Primary: Android Native TextToSpeech via AndroidAudioBridge (Direct Hardware Loudspeaker & Zero Latency).
-   * Web Fallback: Tuned Indian female browser speech synthesizer (Google हिन्दी / Swara / Neerja / Priya) with warm pitch and natural prosody.
+   * Secondary: Direct Native MediaPlayer Hardware Loudspeaker via Groq WAV (Rockchip RK3568 POS).
+   * Web Fallback: Tuned Indian female browser speech synthesizer (Google हिन्दी / Swara / Neerja / Priya).
    */
-  public async speak(text: string, onEnd?: () => void) {
+  public async speak(text: string, onEnd?: () => void, skipNative: boolean = false) {
     if (!text) {
       onEnd?.();
       return;
@@ -1211,12 +1150,12 @@ export class AudioManager {
     if (!this.geminiRecognizer) {
       if (Capacitor.isNativePlatform()) {
         try {
-          CapSpeechRecognition.stop().catch(() => {});
-        } catch {}
+          CapSpeechRecognition.stop().catch(() => { });
+        } catch { }
       } else if (this.isAndroidMobile && this.recognition) {
         try {
           this.recognition.stop();
-        } catch {}
+        } catch { }
       }
     }
 
@@ -1227,7 +1166,7 @@ export class AudioManager {
     // Force Android hardware loudspeaker routing (STREAM_MUSIC) before any playback
     try {
       (window as any).AndroidAudioBridge?.forceSpeaker?.();
-    } catch {}
+    } catch { }
 
     let finished = false;
     const finishSpeech = () => {
@@ -1265,7 +1204,7 @@ export class AudioManager {
 
     // Attempt 1: Android Native TextToSpeech via AndroidAudioBridge (Direct Hardware Loudspeaker & Zero Latency)
     const audioBridge = (window as any).AndroidAudioBridge;
-    if (audioBridge && typeof audioBridge.speakIndian === 'function') {
+    if (!skipNative && audioBridge && typeof audioBridge.speakIndian === 'function') {
       try {
         const spoken = audioBridge.speakIndian(cleanSpeechText, targetLang, targetPitch, targetRate);
         if (spoken) {
@@ -1273,15 +1212,27 @@ export class AudioManager {
 
           const onEnded = () => {
             window.removeEventListener('native_speech_ended', onEnded);
+            window.removeEventListener('native_speech_error', onNativeError);
             finishSpeech();
           };
+          // Native engine accepted the text but could not produce sound -> use cloud voice instead of silence
+          const onNativeError = () => {
+            window.removeEventListener('native_speech_ended', onEnded);
+            window.removeEventListener('native_speech_error', onNativeError);
+            if (this.speechWatchdogTimer) clearTimeout(this.speechWatchdogTimer);
+            if (finished) return;
+            apkLogger.warn('MIC', 'Native TTS error; retrying with cloud voice');
+            this.speak(text, onEnd, true);
+          };
           window.addEventListener('native_speech_ended', onEnded);
+          window.addEventListener('native_speech_error', onNativeError);
 
           // Watchdog in case native completion event doesn't fire
           const wordCount = cleanSpeechText.split(/\s+/).length;
           const estimatedDurationMs = Math.max(2500, (wordCount / 2.0) * 1000 + 2000);
           this.speechWatchdogTimer = setTimeout(() => {
             window.removeEventListener('native_speech_ended', onEnded);
+            window.removeEventListener('native_speech_error', onNativeError);
             finishSpeech();
           }, estimatedDurationMs);
 
@@ -1298,7 +1249,7 @@ export class AudioManager {
     if (voiceKey && voiceKey.startsWith('gsk_')) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
         const startTime = Date.now();
 
         // Warm, friendly hospitality persona
@@ -1322,21 +1273,62 @@ export class AudioManager {
 
         if (res.ok) {
           const wavBlob = await res.blob();
+
+          // Native Android Hardware MediaPlayer: Route directly to Java MediaPlayer on STREAM_MUSIC!
+          if (audioBridge && typeof audioBridge.playWavAudio === 'function') {
+            try {
+              const reader = new FileReader();
+              const base64Promise = new Promise<string>((resolve, reject) => {
+                reader.onloadend = () => {
+                  const dataUrl = reader.result as string;
+                  const base64 = dataUrl.split(',')[1] || '';
+                  resolve(base64);
+                };
+                reader.onerror = reject;
+              });
+              reader.readAsDataURL(wavBlob);
+              const base64Wav = await base64Promise;
+
+              if (base64Wav) {
+                const played = audioBridge.playWavAudio(base64Wav);
+                if (played) {
+                  apkLogger.success('MIC', `Hardware loudspeaker playback via Native MediaPlayer (${Date.now() - startTime}ms)`);
+                  const onEnded = () => {
+                    window.removeEventListener('native_speech_ended', onEnded);
+                    finishSpeech();
+                  };
+                  window.addEventListener('native_speech_ended', onEnded);
+
+                  const wordCount = cleanSpeechText.split(/\s+/).length;
+                  const estimatedDurationMs = Math.max(3000, (wordCount / 2.0) * 1000 + 2500);
+                  this.speechWatchdogTimer = setTimeout(() => {
+                    window.removeEventListener('native_speech_ended', onEnded);
+                    finishSpeech();
+                  }, estimatedDurationMs);
+                  return;
+                }
+              }
+            } catch (nativePlayErr: any) {
+              apkLogger.warn('MIC', `Native MediaPlayer failed (${nativePlayErr?.message || nativePlayErr}); using HTML5 Audio fallback`);
+            }
+          }
+
+          // HTML5 Web Audio Fallback (desktop / browser)
           const blobUrl = URL.createObjectURL(wavBlob);
           const audio = new Audio(blobUrl);
-          audio.volume = 0.58;
+          audio.volume = 0.95;
           this.currentAudioElement = audio;
 
           try {
             (window as any).AndroidAudioBridge?.forceSpeaker?.();
-          } catch {}
+          } catch { }
 
           apkLogger.success('MIC', `Loudspeaker playback via Groq WAV (${Date.now() - startTime}ms)`);
 
           const cleanupUrl = () => {
             try {
               URL.revokeObjectURL(blobUrl);
-            } catch {}
+            } catch { }
           };
 
           audio.onended = () => {
