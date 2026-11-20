@@ -486,6 +486,51 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
   }
 }
 
+/**
+ * Real-Time Full-Duplex Echo Detection (like Gemini Live):
+ * Determines whether a transcribed audio chunk is simply the kiosk's own loudspeaker
+ * echo playing into the chassis microphone, or a genuine customer vocal interruption.
+ */
+export function isEchoOfAssistant(recognizedText: string, assistantSpeech: string): boolean {
+  if (!recognizedText) return true;
+  if (!assistantSpeech) return false;
+
+  const rec = recognizedText.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+  const asst = assistantSpeech.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+
+  if (!rec) return true;
+
+  // Directive customer words that ALWAYS mean a human is actively speaking/interrupting
+  const directInterruptRegex = /\b(wait|stop|cancel|change|remove|delete|no|nahi|suno|bhai|aur|instead|ruk|ruko)\b/i;
+  if (directInterruptRegex.test(rec)) {
+    return false; // Definite customer vocal interruption!
+  }
+
+  // Exact or near substring match: if assistant was saying this exact phrase, it's echo
+  if (asst.includes(rec)) {
+    return true;
+  }
+
+  // Word overlap ratio check
+  const recWords = rec.split(/\s+/).filter(w => w.length > 2);
+  if (recWords.length === 0) return true;
+
+  let matchedWords = 0;
+  for (const word of recWords) {
+    if (asst.includes(word)) {
+      matchedWords++;
+    }
+  }
+
+  const matchRatio = matchedWords / recWords.length;
+  // If >= 65% of words are repeating the assistant's own sentence, treat as speaker echo
+  if (matchRatio >= 0.65) {
+    return true;
+  }
+
+  return false;
+}
+
 export class GeminiCloudAudioRecognizer {
   private audioCtx: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
@@ -504,6 +549,7 @@ export class GeminiCloudAudioRecognizer {
   private isListening = false;
   private isSpeaking = false;
   private isTranscribing = false;
+  private currentAssistantSpeech: string = '';
 
   // 5-Second Periodic Chunk Engine
   private currentChunkFrames: Float32Array[] = [];
@@ -688,15 +734,25 @@ export class GeminiCloudAudioRecognizer {
         const volPercent = Math.round(this.smoothedVolume);
         this.onVolumeCallback?.(volPercent);
 
-        // KIOSK HARDWARE ACOUSTIC ISOLATION & ZERO SELF-INTERRUPTION:
-        // When the assistant speaks via the kiosk loudspeakers, sound bleeds directly into the
-        // microphone at 60%–95% RMS. Microphone amplitude alone cannot distinguish speaker audio from human voice.
-        // Therefore, while assistant is speaking, DO NOT self-interrupt from microphone audio!
-        // The assistant will finish her full sentence with 100% reliability.
-        // Customer can interrupt instantly at any millisecond via Screen Touch, Tap-to-Speak, or Barge-In button.
+        // FULL-DUPLEX ACOUSTIC BARGE-IN:
+        // While the assistant speaks, continue collecting audio frames so customer voice can interrupt.
+        // False self-interruption is prevented by isEchoOfAssistant in the chunk processor.
+        // If raw volume spikes to extreme shouting level (> 92%) after 400ms onset, allow quick barge-in.
         if (this.isSpeaking) {
-          this.bargeInConsecutiveFrames = 0;
-          return;
+          const timeSinceSpeechStart = Date.now() - this.speechStartTime;
+          if (timeSinceSpeechStart > 400 && rawVol >= 92) {
+            this.bargeInConsecutiveFrames++;
+            if (this.bargeInConsecutiveFrames >= 3) {
+              this.isSpeaking = false;
+              this.bargeInConsecutiveFrames = 0;
+              apkLogger.info('MIC', `⚡ Loud Customer Vocal Barge-In detected (${rawVol}% >= 92%)! Halting assistant speech in <20ms...`);
+              if (this.onBargeInCallback) {
+                this.onBargeInCallback();
+              }
+            }
+          } else {
+            this.bargeInConsecutiveFrames = 0;
+          }
         }
 
         // Track peak volume in current chunk
@@ -822,6 +878,25 @@ export class GeminiCloudAudioRecognizer {
       }
 
       if (text && this.isListening) {
+        if (this.isSpeaking) {
+          // Full-Duplex AEC Echo Verification:
+          // Check if this audio chunk is simply the kiosk's own speaker echoing back
+          if (isEchoOfAssistant(text, this.currentAssistantSpeech)) {
+            apkLogger.info('MIC', `[AEC-ECHO-CANCELLED] Assistant speaker feedback filtered: "${text}"`);
+            return;
+          }
+
+          // Genuine Customer Vocal Interruption (Barge-In)!
+          apkLogger.success('MIC', `⚡ Customer vocal interruption detected: "${text}"! Halting assistant speech in <20ms...`);
+          this.isSpeaking = false;
+          this.currentAssistantSpeech = '';
+          if (this.onBargeInCallback) {
+            this.onBargeInCallback();
+          }
+          this.onTranscriptCallback?.(text);
+          return;
+        }
+
         this.onLogCallback?.(`Whisper recognized: "${text}"`);
         this.onInterimCallback?.('');
         this.onTranscriptCallback?.(text);
@@ -901,9 +976,10 @@ export class GeminiCloudAudioRecognizer {
     }, durationMs);
   }
 
-  public pauseForSpeaking() {
+  public pauseForSpeaking(assistantText?: string) {
     this.isSpeaking = true;
     this.speechStartTime = Date.now();
+    this.currentAssistantSpeech = (assistantText || '').trim();
     this.currentChunkFrames = [];
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
@@ -926,6 +1002,7 @@ export class GeminiCloudAudioRecognizer {
 
   public resumeListening() {
     this.isSpeaking = false;
+    this.currentAssistantSpeech = '';
     this.chunkStartTime = Date.now();
     this.currentChunkFrames = [];
     this.chunkPeakVolume = 0;

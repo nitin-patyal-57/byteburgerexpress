@@ -191,7 +191,7 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
                         );
                         mediaPlayer.setDataSource(tempAudio.getAbsolutePath());
                         mediaPlayer.setOnPreparedListener(mp -> {
-                            mp.setVolume(1.0f, 1.0f);
+                            mp.setVolume(0.85f, 0.85f);
                             mp.start();
                         });
                         mediaPlayer.setOnCompletionListener(mp -> {

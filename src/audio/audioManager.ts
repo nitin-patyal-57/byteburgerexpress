@@ -667,13 +667,16 @@ export class AudioManager {
       if (!this.geminiRecognizer) {
         this.geminiRecognizer = new GeminiCloudAudioRecognizer(
           (text: string) => {
-            if (text && this.isListening && !this.isSpeaking) {
+            if (text && this.isListening) {
+              if (this.isSpeaking) {
+                this.flushImmediate();
+              }
               this.logRCA('RECOGNITION_RESULT', `Gemini transcribed: "${text}"`);
               this.commitFinalTranscript(text, 'gemini_cloud_audio');
             }
           },
           (interim: string) => {
-            if (this.onTranscriptCallback && interim && !this.isSpeaking) {
+            if (this.onTranscriptCallback && interim) {
               this.onTranscriptCallback(interim, false);
             }
           },
@@ -1132,8 +1135,8 @@ export class AudioManager {
     this.flushImmediate();
     this.isSpeaking = true;
 
-    // Immediately notify recognizer that speech output is starting
-    this.geminiRecognizer?.pauseForSpeaking();
+    // Immediately notify recognizer that speech output is starting (with assistant text for full-duplex echo cancellation)
+    this.geminiRecognizer?.pauseForSpeaking(text);
 
     if (this.onStateChangeCallback) {
       this.onStateChangeCallback('SPEAKING');
