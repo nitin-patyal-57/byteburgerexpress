@@ -629,11 +629,45 @@ export class GeminiCloudAudioRecognizer {
         const volPercent = Math.round(this.smoothedVolume);
         this.onVolumeCallback?.(volPercent);
 
-        // When assistant is speaking, ignore microphone input to completely prevent
-        // loudspeaker acoustic feedback (which reaches 70%+ on mobile and 20%+ on POS kiosks)
-        // from falsely self-interrupting and cutting off speech playback prematurely.
-        // Tap screen or mic button anytime to interrupt instantly (<10ms).
+        // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Voice Interruption (like Gemini Live)
         if (this.isSpeaking) {
+          // 1. Immunity window: ignore first 350ms of audio onset
+          const timeSinceSpeechStart = Date.now() - this.speechStartTime;
+          if (timeSinceSpeechStart < 350) {
+            this.bargeInConsecutiveFrames = 0;
+            return;
+          }
+
+          // 2. Sensitive Barge-In Gate:
+          // With assistant volume calibrated to 0.58, speaker bleed at the mic peaks around 15-20% RMS.
+          // Near-field human voice (standing/holding device) directly in front reaches 35-65% RMS.
+          const bargeInGate = Math.max(32.0, this.filterConfig.noiseGateThreshold + 18.0);
+
+          if (rawVol >= bargeInGate) {
+            this.bargeInConsecutiveFrames++;
+            // Require 2 consecutive frames (~170ms) of sustained human vocal energy
+            if (this.bargeInConsecutiveFrames >= 2) {
+              this.isSpeaking = false;
+              this.bargeInConsecutiveFrames = 0;
+              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <20ms...`);
+
+              // Trigger immediate speech cancellation in audioManager
+              if (this.onBargeInCallback) {
+                this.onBargeInCallback();
+              }
+
+              // Seed the new customer utterance chunk with the pre-roll frames so their opening words are preserved!
+              this.currentChunkFrames = [...this.preRollBuffer];
+              this.chunkStartTime = Date.now();
+              this.chunkPeakVolume = rawVol;
+              this.chunkSpeechDetected = true;
+              this.lastSpeechTime = Date.now();
+              this.onStateCallback?.('LISTENING');
+              this.onInterimCallback?.('⚡ Interrupted — Listening to you...');
+            }
+          } else {
+            this.bargeInConsecutiveFrames = 0;
+          }
           return;
         }
 
@@ -709,7 +743,7 @@ export class GeminiCloudAudioRecognizer {
   }
 
   private async processChunk(frames: Float32Array[]) {
-    if (frames.length === 0 || this.isTranscribing || this.isSpeaking) return;
+    if (frames.length === 0 || this.isTranscribing) return;
 
     this.isTranscribing = true;
     this.onStateCallback?.('THINKING');

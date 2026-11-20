@@ -180,7 +180,7 @@ public class MainActivity extends BridgeActivity implements TextToSpeech.OnInitL
 
                     Bundle params = new Bundle();
                     params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
-                    params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f);
+                    params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 0.65f);
                     String utteranceId = "byteburger_utt_" + System.currentTimeMillis();
 
                     nativeTts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);

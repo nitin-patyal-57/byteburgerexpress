@@ -717,13 +717,19 @@ export class AudioManager {
       if (!this.geminiRecognizer) {
         this.geminiRecognizer = new GeminiCloudAudioRecognizer(
           (text: string) => {
-            if (text && this.isListening && !this.isSpeaking) {
+            if (text && this.isListening) {
+              if (this.isSpeaking) {
+                this.flushImmediate();
+              }
               this.logRCA('RECOGNITION_RESULT', `Gemini transcribed: "${text}"`);
               this.commitFinalTranscript(text, 'gemini_cloud_audio');
             }
           },
           (interim: string) => {
-            if (this.onTranscriptCallback && !this.isSpeaking) {
+            if (this.onTranscriptCallback) {
+              if (interim && this.isSpeaking) {
+                this.flushImmediate();
+              }
               this.onTranscriptCallback(interim, false);
             }
           },
@@ -731,7 +737,7 @@ export class AudioManager {
             this.lastVolume = vol;
           },
           (state: 'LISTENING' | 'THINKING' | 'IDLE') => {
-            if (this.onStateChangeCallback && !this.isSpeaking) {
+            if (this.onStateChangeCallback) {
               this.onStateChangeCallback(state === 'IDLE' ? 'IDLE' : 'LISTENING');
             }
           },
@@ -1318,7 +1324,7 @@ export class AudioManager {
           const wavBlob = await res.blob();
           const blobUrl = URL.createObjectURL(wavBlob);
           const audio = new Audio(blobUrl);
-          audio.volume = 0.88;
+          audio.volume = 0.58;
           this.currentAudioElement = audio;
 
           try {
