@@ -1216,7 +1216,7 @@ export class AudioManager {
               encoding: 'pcm_s16le',
               sample_rate: 24000,
             },
-            language: isHindiOrHinglish ? 'hi' : 'en',
+            language: 'en',
           }),
           signal: controller.signal,
         });

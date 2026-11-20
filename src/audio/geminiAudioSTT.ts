@@ -152,7 +152,7 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string, abortSig
   form.append('model', 'whisper-large-v3-turbo');
   form.append('temperature', '0');
   form.append('response_format', 'json');
-  form.append('prompt', 'Add double cheese burger, peri peri fries, coke, confirm order, ek burger aur fries, cancel, nahi chahiye, namaste, shukriya');
+  form.append('prompt', 'ByteBurger Express food order: burger, fries, drink, combo, veg, cancel.');
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12000);
@@ -760,60 +760,70 @@ export class GeminiCloudAudioRecognizer {
           this.chunkPeakVolume = volPercent;
         }
 
-        // Dynamically track ambient hall noise floor when quiet
+        // Dynamically track ambient room noise floor when quiet
         if (!this.chunkSpeechDetected) {
           this.ambientNoiseFloor = this.ambientNoiseFloor * 0.95 + volPercent * 0.05;
         }
 
-        // Speech detection gate
-        const gate = this.filterConfig.noiseGateThreshold;
-        const effectiveGate = Math.max(gate, Math.min(this.ambientNoiseFloor + 1.2, 7.5));
-        const IS_SPEECH = volPercent >= effectiveGate;
+        // Adaptive Human Speech Gate:
+        // Direct human voice at the kiosk is 18%–65% RMS; ambient room noise is 5%–11%.
+        // Gate requires clear vocal energy above room noise to eliminate silence hallucinations.
+        const speechGate = Math.max(12.0, this.ambientNoiseFloor + 5.0);
+        const IS_SPEECH = volPercent >= speechGate;
 
         if (IS_SPEECH) {
           if (!this.chunkSpeechDetected) {
             this.chunkSpeechDetected = true;
+            this.chunkStartTime = Date.now();
             this.onInterimCallback?.('Listening to your order...');
-            this.onLogCallback?.(`Speech detected (${volPercent}% >= gate ${effectiveGate.toFixed(1)}%)`);
+            this.onLogCallback?.(`Speech detected (${volPercent}% >= gate ${speechGate.toFixed(1)}%)`);
           }
           this.lastSpeechTime = Date.now();
         }
 
-        this.currentChunkFrames.push(frame);
+        // Rolling Pre-Roll buffer to retain the opening 250ms consonants
+        if (this.chunkSpeechDetected) {
+          this.currentChunkFrames.push(frame);
+        } else {
+          this.preRollBuffer.push(frame);
+          if (this.preRollBuffer.length > 3) {
+            this.preRollBuffer.shift();
+          }
+        }
 
         // If in Tap-to-Speak mode, let the dedicated 5s timer handle the commit
         if (this.isTapToSpeakActive) {
           return;
         }
 
-        // Real-Time Conversational Endpointing Engine:
-        // 1. Natural conversational pause: customer finished their sentence and paused for >= 650ms
-        // 2. Minimum utterance duration >= 450ms (prevents false triggers on lip smacks/coughs)
-        // 3. Streaming boundary cap: 3500ms (ensures compound sentences are processed promptly)
+        // High-Speed Conversational Endpointing:
+        // Customer spoke and then paused for >= 480ms (natural sentence completion)
         const now = Date.now();
-        const chunkElapsed = now - this.chunkStartTime;
+        const speechElapsed = this.chunkSpeechDetected ? (now - this.chunkStartTime) : 0;
+        const silenceSinceLastSpeech = this.chunkSpeechDetected ? (now - this.lastSpeechTime) : 0;
 
         const speechFinished =
           this.chunkSpeechDetected &&
           this.lastSpeechTime > 0 &&
-          now - this.lastSpeechTime >= 650 &&
-          chunkElapsed >= 450;
+          silenceSinceLastSpeech >= 480 &&
+          speechElapsed >= 380;
 
-        const isMaxBoundary = chunkElapsed >= 3500;
+        const isMaxBoundary = this.chunkSpeechDetected && speechElapsed >= 4000;
 
-        if (isMaxBoundary || speechFinished) {
-          const framesToProcess = [...this.currentChunkFrames];
-          const hadSpeech = this.chunkSpeechDetected && this.chunkPeakVolume >= Math.max(8.5, effectiveGate);
+        if (speechFinished || isMaxBoundary) {
+          const framesToProcess = [...this.preRollBuffer, ...this.currentChunkFrames];
+          const peakVol = this.chunkPeakVolume;
 
-          // Start next chunk immediately (preserve 2 frames ~170ms overlap)
-          this.currentChunkFrames = this.currentChunkFrames.slice(-2);
+          // Reset chunk state for next turn
+          this.currentChunkFrames = [];
+          this.preRollBuffer = [];
           this.chunkStartTime = now;
           this.chunkPeakVolume = 0;
           this.chunkSpeechDetected = false;
           this.lastSpeechTime = 0;
 
-          if (hadSpeech) {
-            // If previous transcription is still in flight, abort it because customer just spoke a newer command!
+          // Only send if peak volume showed genuine human vocal energy
+          if (peakVol >= Math.max(13.0, speechGate)) {
             if (this.isTranscribing && this.activeAbortController) {
               try { this.activeAbortController.abort(); } catch {}
               this.activeAbortController = null;
