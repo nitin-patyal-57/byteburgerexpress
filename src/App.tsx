@@ -376,6 +376,13 @@ export default function App() {
 
   // Toggle microphone
   const handleToggleMic = async () => {
+    if (voiceState === 'SPEAKING') {
+      // Tap while assistant is speaking -> instant barge-in interruption!
+      globalAudioManager.flushImmediate();
+      setVoiceState('LISTENING');
+      globalAudioManager.resumeListening(0);
+      return;
+    }
     if (isMicActive) {
       isMicActiveRef.current = false;
       globalAudioManager.stopMicrophone();

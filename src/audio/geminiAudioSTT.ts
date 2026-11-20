@@ -629,47 +629,11 @@ export class GeminiCloudAudioRecognizer {
         const volPercent = Math.round(this.smoothedVolume);
         this.onVolumeCallback?.(volPercent);
 
-        // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Interruption Detection
+        // When assistant is speaking, ignore microphone input to completely prevent
+        // loudspeaker acoustic feedback (which reaches 70%+ on mobile and 20%+ on POS kiosks)
+        // from falsely self-interrupting and cutting off speech playback prematurely.
+        // Tap screen or mic button anytime to interrupt instantly (<10ms).
         if (this.isSpeaking) {
-          // 1. IMMUNITY WINDOW: 600ms to ignore initial audio playback onset & speaker transient
-          const timeSinceSpeechStart = Date.now() - this.speechStartTime;
-          if (timeSinceSpeechStart < 600) {
-            this.bargeInConsecutiveFrames = 0;
-            return;
-          }
-
-          // 2. SENSITIVE & RELIABLE BARGE-IN GATE:
-          // Kiosk speaker acoustic bleed at the mic peaks around 18-21% RMS (measured 20.9% in field logs).
-          // Real customer speech directly in front of the tablet reaches 30-50% RMS.
-          // Set gate to 30.0% so kiosk loudspeaker echo NEVER triggers false barge-in,
-          // while genuine customer voice interrupts instantly!
-          const bargeInGate = Math.max(30.0, this.filterConfig.noiseGateThreshold + 18.0);
-
-          if (rawVol >= bargeInGate) {
-            this.bargeInConsecutiveFrames++;
-            // 3. SUSTAINED VOICE: Require 3 consecutive frames (~255ms) to confirm genuine customer voice
-            if (this.bargeInConsecutiveFrames >= 3) {
-              this.isSpeaking = false;
-              this.bargeInConsecutiveFrames = 0;
-              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <20ms...`);
-
-              // Trigger immediate speech cancellation in audioManager
-              if (this.onBargeInCallback) {
-                this.onBargeInCallback();
-              }
-
-              // Seed the new customer utterance chunk with the pre-roll frames so their opening words are preserved!
-              this.currentChunkFrames = [...this.preRollBuffer];
-              this.chunkStartTime = Date.now();
-              this.chunkPeakVolume = rawVol;
-              this.chunkSpeechDetected = true;
-              this.lastSpeechTime = Date.now();
-              this.onStateCallback?.('LISTENING');
-              this.onInterimCallback?.('⚡ Interrupted — Listening to you...');
-            }
-          } else {
-            this.bargeInConsecutiveFrames = 0;
-          }
           return;
         }
 
