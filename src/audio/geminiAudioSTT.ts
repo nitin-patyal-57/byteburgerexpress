@@ -711,12 +711,6 @@ export class GeminiCloudAudioRecognizer {
         const inputData = e.inputBuffer.getChannelData(0);
         const frame = new Float32Array(inputData);
 
-        // Keep rolling pre-roll buffer (last 5 frames ~425ms)
-        this.preRollBuffer.push(frame);
-        if (this.preRollBuffer.length > 5) {
-          this.preRollBuffer.shift();
-        }
-
         // Compute true RMS energy of the frame
         let sumSq = 0;
         for (let i = 0; i < inputData.length; i++) {
@@ -775,18 +769,21 @@ export class GeminiCloudAudioRecognizer {
           if (!this.chunkSpeechDetected) {
             this.chunkSpeechDetected = true;
             this.chunkStartTime = Date.now();
+            // Prepend rolling pre-roll buffer so opening consonants (p-, b-, f-) are preserved chronologically
+            this.currentChunkFrames = [...this.preRollBuffer];
+            this.preRollBuffer = [];
             this.onInterimCallback?.('Listening to your order...');
             this.onLogCallback?.(`Speech detected (${volPercent}% >= gate ${speechGate.toFixed(1)}%)`);
           }
           this.lastSpeechTime = Date.now();
         }
 
-        // Rolling Pre-Roll buffer to retain the opening 250ms consonants
+        // Append frame to speech chunk if active, otherwise maintain rolling pre-roll buffer
         if (this.chunkSpeechDetected) {
           this.currentChunkFrames.push(frame);
         } else {
           this.preRollBuffer.push(frame);
-          if (this.preRollBuffer.length > 3) {
+          if (this.preRollBuffer.length > 4) {
             this.preRollBuffer.shift();
           }
         }
@@ -811,7 +808,7 @@ export class GeminiCloudAudioRecognizer {
         const isMaxBoundary = this.chunkSpeechDetected && speechElapsed >= 4000;
 
         if (speechFinished || isMaxBoundary) {
-          const framesToProcess = [...this.preRollBuffer, ...this.currentChunkFrames];
+          const framesToProcess = [...this.currentChunkFrames];
           const peakVol = this.chunkPeakVolume;
 
           // Reset chunk state for next turn
