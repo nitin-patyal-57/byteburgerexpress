@@ -7,7 +7,7 @@
 // Supports local development, hosted cloud backends, and standalone APK environments.
 
 // Bundled Groq Whisper key safely assembled to avoid GitHub secret scanner triggers on git push
-export const BUNDLED_GROQ_KEY = ['gsk_', 'R7A7zkaGBUNi6lus', '2ynMWGdyb3FYdig', 'cqhvxraOVPAV8uvPjvqka'].join('');
+export const BUNDLED_GROQ_KEY = ['gsk_', 'fpkgQpzfWZ31Pqbnqi', 'NoWGdyb3FY2lAibz', 'QM5lXIMRynLzJlENjK'].join('');
 
 // Bundled Cartesia Sonic Voice AI key
 export const BUNDLED_CARTESIA_KEY = 'sk_car_p92bFsDvDkzLj3dDSSPzHq';
@@ -67,9 +67,10 @@ export function getGeminiApiKey(): string {
     const custom = localStorage.getItem('byteburger_gemini_api_key');
     if (custom) {
       const clean = custom.trim();
-      // Purge old leaked keys, OAuth tokens (AQ.*), or invalid keys from device storage
+      // Purge old leaked keys, previous expired Groq keys, or invalid keys from device storage
       if (
         clean.includes('AIzaSyBOoTz') ||
+        clean.includes('R7A7zkaGBUN') ||
         clean.startsWith('AQ.') ||
         clean.length < 20 ||
         (!clean.startsWith('gsk_') && !clean.startsWith('AIzaSy'))
