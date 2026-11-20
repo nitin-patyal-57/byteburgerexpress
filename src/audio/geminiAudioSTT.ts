@@ -152,7 +152,7 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string, abortSig
   form.append('model', 'whisper-large-v3-turbo');
   form.append('temperature', '0');
   form.append('response_format', 'json');
-  form.append('prompt', 'ByteBurger Express kiosk food order in English, Hindi and Hinglish: Add double cheese burger, peri peri fries, coke, confirm order, ek burger aur fries add kardo, cancel, nahi chahiye, namaste, shukriya, bhai');
+  form.append('prompt', 'Add double cheese burger, peri peri fries, coke, confirm order, ek burger aur fries, cancel, nahi chahiye, namaste, shukriya');
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 12000);
@@ -194,9 +194,28 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string, abortSig
     const data = await res.json();
     const clean = (data?.text || '').trim().replace(/^["']|["']$/g, '');
 
-    // Filter silence artifacts common to Whisper on low volume
-    if (!clean || clean.toUpperCase() === 'THANK YOU.' || clean.toUpperCase() === 'YOU' || clean.toUpperCase() === 'THANK YOU') {
-      apkLogger.info('GEMINI', `Groq Whisper 200 OK (${elapsed}ms) -> [SILENCE / NO SPEECH]`);
+    // Filter silence artifacts, prompt echoes, and non-speech phonemes
+    const upperClean = clean.toUpperCase().replace(/[.,!?;:]/g, '').trim();
+    const isNoiseArtifact =
+      !upperClean ||
+      upperClean.length <= 1 ||
+      upperClean === 'THANK YOU' ||
+      upperClean === 'YOU' ||
+      upperClean === 'ENGLISH' ||
+      upperClean === 'HINGLISH' ||
+      upperClean === 'HINDI' ||
+      upperClean === 'BISH' ||
+      upperClean === 'AAND' ||
+      upperClean === 'GIRA' ||
+      upperClean === 'SILENCE' ||
+      upperClean === 'NO SPEECH' ||
+      upperClean === 'SUBTITLES' ||
+      upperClean === 'FOUND ONE' ||
+      upperClean === 'SHOWING OFF' ||
+      upperClean === 'BYE';
+
+    if (isNoiseArtifact) {
+      apkLogger.info('GEMINI', `Groq Whisper 200 OK (${elapsed}ms) -> [FILTERED NOISE ARTIFACT: "${clean}"]`);
       return '';
     }
 
@@ -764,7 +783,7 @@ export class GeminiCloudAudioRecognizer {
 
         if (isMaxBoundary || speechFinished) {
           const framesToProcess = [...this.currentChunkFrames];
-          const hadSpeech = this.chunkSpeechDetected || this.chunkPeakVolume >= effectiveGate;
+          const hadSpeech = this.chunkSpeechDetected && this.chunkPeakVolume >= Math.max(8.5, effectiveGate);
 
           // Start next chunk immediately (preserve 2 frames ~170ms overlap)
           this.currentChunkFrames = this.currentChunkFrames.slice(-2);

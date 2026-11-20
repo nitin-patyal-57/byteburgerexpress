@@ -16,6 +16,7 @@ export function countMenuMatches(
   vegFilter: 'ALL' | 'VEG' | 'NON_VEG' = 'ALL'
 ): number {
   const q = (query || '').toLowerCase().trim();
+  if (q.length < 2) return 0;
   return SEED_MENU_ITEMS.filter(item => {
     if (category !== 'All' && item.category !== category) return false;
     if (vegFilter === 'VEG' && !item.isVeg) return false;
@@ -1109,6 +1110,14 @@ export function parseDeterministicIntent(
     .replace(/\b(search for|search|find|show me|show|options|option|items|item|menu|dikhao|batao|kya hai|please)\b/gi, '')
     .trim();
   const queryToSearch = cleanKeyword || text;
+
+  // Filter single-letter or stray short noise tokens (e.g. "b", "a", "of")
+  if (queryToSearch.length < 3) {
+    return {
+      reply: '',
+      toolCalls: [],
+    };
+  }
 
   // Category fallback if query is synonymous with a category
   if (
