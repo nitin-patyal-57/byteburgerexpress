@@ -2,7 +2,6 @@ import { normalizeQSRSpokenUtterance } from '../core/acousticNormalizer';
 import { getBackendBaseUrl, getVoiceApiKey, getCartesiaApiKey } from '../config';
 import { apkLogger } from '../utils/apkLogger';
 import { Capacitor } from '@capacitor/core';
-import { SpeechRecognition as CapSpeechRecognition } from '@capacitor-community/speech-recognition';
 import { TextToSpeech as CapTextToSpeech } from '@capacitor-community/text-to-speech';
 import { GeminiCloudAudioRecognizer } from './geminiAudioSTT';
 
@@ -388,7 +387,7 @@ export class AudioManager {
   }
 
   private initRecognition() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || Capacitor.isNativePlatform() || this.isAndroidMobile) return;
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
@@ -668,19 +667,13 @@ export class AudioManager {
       if (!this.geminiRecognizer) {
         this.geminiRecognizer = new GeminiCloudAudioRecognizer(
           (text: string) => {
-            if (text && this.isListening) {
-              if (this.isSpeaking) {
-                this.flushImmediate();
-              }
+            if (text && this.isListening && !this.isSpeaking) {
               this.logRCA('RECOGNITION_RESULT', `Gemini transcribed: "${text}"`);
               this.commitFinalTranscript(text, 'gemini_cloud_audio');
             }
           },
           (interim: string) => {
-            if (this.onTranscriptCallback) {
-              if (interim && this.isSpeaking) {
-                this.flushImmediate();
-              }
+            if (this.onTranscriptCallback && interim && !this.isSpeaking) {
               this.onTranscriptCallback(interim, false);
             }
           },
@@ -811,15 +804,17 @@ export class AudioManager {
       this.isListening = true;
       this.recognitionState = 'ACTIVE';
 
-      if (!this.recognition) {
-        this.initRecognition();
-      }
+      if (!Capacitor.isNativePlatform() && !this.isAndroidMobile) {
+        if (!this.recognition) {
+          this.initRecognition();
+        }
 
-      if (this.recognition) {
-        try {
-          this.recognition.start();
-        } catch {
-          // already started or transitioning
+        if (this.recognition) {
+          try {
+            this.recognition.start();
+          } catch {
+            // already started or transitioning
+          }
         }
       }
 
@@ -861,7 +856,7 @@ export class AudioManager {
       this.isListening = true;
       this.lastErrorMessage = `Mic stream notice: ${err?.message || err}`;
       this.logRCA('RECOGNITION_ERROR', this.lastErrorMessage);
-      if (this.recognition) {
+      if (!Capacitor.isNativePlatform() && !this.isAndroidMobile && this.recognition) {
         try {
           this.recognition.start();
           this.recognitionState = 'ACTIVE';
@@ -893,14 +888,6 @@ export class AudioManager {
     if (this.interimInactivityTimer) {
       clearTimeout(this.interimInactivityTimer);
       this.interimInactivityTimer = null;
-    }
-
-    if (Capacitor.isNativePlatform()) {
-      try {
-        CapSpeechRecognition.stop();
-      } catch {
-        // ignore
-      }
     }
 
     if (this.recognition) {
@@ -1147,17 +1134,6 @@ export class AudioManager {
 
     // Immediately notify recognizer that speech output is starting
     this.geminiRecognizer?.pauseForSpeaking();
-    if (!this.geminiRecognizer) {
-      if (Capacitor.isNativePlatform()) {
-        try {
-          CapSpeechRecognition.stop().catch(() => { });
-        } catch { }
-      } else if (this.isAndroidMobile && this.recognition) {
-        try {
-          this.recognition.stop();
-        } catch { }
-      }
-    }
 
     if (this.onStateChangeCallback) {
       this.onStateChangeCallback('SPEAKING');

@@ -134,7 +134,7 @@ export default function App() {
   // Core Voice Turn Execution Pipeline
   const processCustomerUtterance = async (customerText: string) => {
     const rawClean = (customerText || '').trim();
-    if (!rawClean) return;
+    if (!rawClean || rawClean.length < 2) return;
 
     // Apply phonetic STT acoustic normalizer (e.g. 'filter all Vijay items' -> 'filter all veg items')
     const normalizedText = normalizeQSRSpokenUtterance(rawClean);
@@ -281,6 +281,9 @@ export default function App() {
               .replace(/\b(search for|search|find|show me|show|options|option|items|item|menu|batao|dikhao|kya hai|please)\b/gi, '')
               .trim();
             const qToSearch = cleanQuery || rawQuery;
+            if (qToSearch.length < 2) {
+              return;
+            }
             const matches = countMenuMatches(qToSearch);
 
             if (matches === 0) {
@@ -395,10 +398,12 @@ export default function App() {
     }
   };
 
-  // Trigger manual barge-in test
+  // Trigger manual barge-in test / button tap
   const handleTriggerBargeIn = () => {
+    apkLogger.info('MIC', '⚡ Customer tapped Barge-In button: Assistant speech silenced instantly. Listening to customer...');
     globalAudioManager.flushImmediate();
-    setVoiceState(isMicActive ? 'LISTENING' : 'IDLE');
+    setVoiceState('LISTENING');
+    globalAudioManager.resumeListening(0);
   };
 
   // Touch handlers: Add manually or ask by voice
@@ -535,7 +540,16 @@ export default function App() {
   return (
     <div
       className="flex flex-col h-[100dvh] w-screen bg-neutral-950 text-neutral-100 overflow-hidden font-['Plus_Jakarta_Sans',sans-serif]"
-      onPointerDown={resetInactivityTimer}
+      onPointerDown={() => {
+        resetInactivityTimer();
+        if (voiceState === 'SPEAKING') {
+          // Instant screen touch barge-in: Customer taps screen anywhere to interrupt assistant speech!
+          apkLogger.info('MIC', '⚡ Customer touched screen: Assistant speech silenced instantly. Listening to customer...');
+          globalAudioManager.flushImmediate();
+          setVoiceState('LISTENING');
+          globalAudioManager.resumeListening(0);
+        }
+      }}
     >
       {/* Kiosk Header Bar */}
       <KioskHeader

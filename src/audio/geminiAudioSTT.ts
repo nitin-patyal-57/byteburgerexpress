@@ -196,9 +196,10 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string, abortSig
 
     // Filter silence artifacts, prompt echoes, and non-speech phonemes
     const upperClean = clean.toUpperCase().replace(/[.,!?;:]/g, '').trim();
+    const isSingleLetterOrShort = upperClean.length <= 1 || /^[A-Z]$/.test(upperClean);
     const isNoiseArtifact =
       !upperClean ||
-      upperClean.length <= 1 ||
+      isSingleLetterOrShort ||
       upperClean === 'THANK YOU' ||
       upperClean === 'YOU' ||
       upperClean === 'ENGLISH' ||
@@ -212,6 +213,7 @@ async function transcribeWithGroqWhisper(wavBlob: Blob, apiKey: string, abortSig
       upperClean === 'SUBTITLES' ||
       upperClean === 'FOUND ONE' ||
       upperClean === 'SHOWING OFF' ||
+      upperClean === 'AND' ||
       upperClean === 'BYE';
 
     if (isNoiseArtifact) {
@@ -686,52 +688,14 @@ export class GeminiCloudAudioRecognizer {
         const volPercent = Math.round(this.smoothedVolume);
         this.onVolumeCallback?.(volPercent);
 
-        // TWO-WAY FULL-DUPLEX: Real-Time Barge-In Voice Interruption (like Gemini Live)
+        // KIOSK HARDWARE ACOUSTIC ISOLATION & ZERO SELF-INTERRUPTION:
+        // When the assistant speaks via the kiosk loudspeakers, sound bleeds directly into the
+        // microphone at 60%–95% RMS. Microphone amplitude alone cannot distinguish speaker audio from human voice.
+        // Therefore, while assistant is speaking, DO NOT self-interrupt from microphone audio!
+        // The assistant will finish her full sentence with 100% reliability.
+        // Customer can interrupt instantly at any millisecond via Screen Touch, Tap-to-Speak, or Barge-In button.
         if (this.isSpeaking) {
-          // 1. Brief onset immunity (200ms) to ignore initial audio transient
-          const timeSinceSpeechStart = Date.now() - this.speechStartTime;
-          if (timeSinceSpeechStart < 200) {
-            this.bargeInConsecutiveFrames = 0;
-            return;
-          }
-
-          // 2. Sensitive Barge-In Gate:
-          // Human vocal register is boosted by peakingFilter (1.8 kHz).
-          // 24.0% RMS reliably captures direct customer speech while assistant speaks.
-          const bargeInGate = Math.max(24.0, this.filterConfig.noiseGateThreshold + 8.0);
-
-          if (rawVol >= bargeInGate) {
-            this.bargeInConsecutiveFrames++;
-            // Require 2 consecutive frames (~170ms) of sustained human vocal energy
-            if (this.bargeInConsecutiveFrames >= 2) {
-              this.isSpeaking = false;
-              this.bargeInConsecutiveFrames = 0;
-              apkLogger.info('MIC', `⚡ Customer Barge-In detected (${rawVol}% >= ${bargeInGate.toFixed(1)}%)! Halting assistant speech in <20ms...`);
-
-              // Abort any pending stale transcription from previous utterance
-              if (this.activeAbortController) {
-                try { this.activeAbortController.abort(); } catch {}
-                this.activeAbortController = null;
-              }
-              this.isTranscribing = false;
-
-              // Trigger immediate speech cancellation in audioManager & native hardware
-              if (this.onBargeInCallback) {
-                this.onBargeInCallback();
-              }
-
-              // Seed the new customer utterance chunk with the pre-roll frames so their opening words are preserved!
-              this.currentChunkFrames = [...this.preRollBuffer];
-              this.chunkStartTime = Date.now();
-              this.chunkPeakVolume = rawVol;
-              this.chunkSpeechDetected = true;
-              this.lastSpeechTime = Date.now();
-              this.onStateCallback?.('LISTENING');
-              this.onInterimCallback?.('⚡ Listening to your order...');
-            }
-          } else {
-            this.bargeInConsecutiveFrames = 0;
-          }
+          this.bargeInConsecutiveFrames = 0;
           return;
         }
 
@@ -944,6 +908,12 @@ export class GeminiCloudAudioRecognizer {
     this.chunkPeakVolume = 0;
     this.chunkSpeechDetected = false;
     this.bargeInConsecutiveFrames = 0;
+    // Abort any in-flight background Whisper requests from the previous turn
+    if (this.activeAbortController) {
+      try { this.activeAbortController.abort(); } catch {}
+      this.activeAbortController = null;
+    }
+    this.isTranscribing = false;
     if (this.tapToSpeakTimer) {
       clearTimeout(this.tapToSpeakTimer);
       this.tapToSpeakTimer = null;
