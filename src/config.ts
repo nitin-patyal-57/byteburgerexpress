@@ -9,6 +9,38 @@
 // Bundled Groq Whisper key safely assembled to avoid GitHub secret scanner triggers on git push
 export const BUNDLED_GROQ_KEY = ['gsk_', 'R7A7zkaGBUNi6lus', '2ynMWGdyb3FYdig', 'cqhvxraOVPAV8uvPjvqka'].join('');
 
+// Bundled Cartesia Sonic Voice AI key
+export const BUNDLED_CARTESIA_KEY = 'sk_car_p92bFsDvDkzLj3dDSSPzHq';
+
+export function getCartesiaApiKey(): string {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('byteburger_cartesia_api_key');
+    if (custom && custom.trim().startsWith('sk_car_')) {
+      return custom.trim();
+    }
+    const geminiCustom = localStorage.getItem('byteburger_gemini_api_key');
+    if (geminiCustom && geminiCustom.trim().startsWith('sk_car_')) {
+      return geminiCustom.trim();
+    }
+  }
+  const envKey = (import.meta.env.VITE_CARTESIA_API_KEY || '').trim();
+  if (envKey && envKey.startsWith('sk_car_')) {
+    return envKey;
+  }
+  return BUNDLED_CARTESIA_KEY;
+}
+
+export function setCartesiaApiKey(key: string): void {
+  if (typeof window !== 'undefined') {
+    const clean = key.trim();
+    if (clean && clean.startsWith('sk_car_')) {
+      localStorage.setItem('byteburger_cartesia_api_key', clean);
+    } else {
+      localStorage.removeItem('byteburger_cartesia_api_key');
+    }
+  }
+}
+
 export function getBackendBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const custom = localStorage.getItem('byteburger_backend_url');

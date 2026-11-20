@@ -361,7 +361,38 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ ok: boolean; m
     return { ok: false, message: 'Invalid key length. A valid API key must be provided.' };
   }
 
-  // 1. Groq API validation ping
+  // 1. Cartesia Sonic API validation ping
+  if (cleanKey.startsWith('sk_car_')) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch('https://api.cartesia.ai/voices', {
+        headers: {
+          'X-API-Key': cleanKey,
+          'Cartesia-Version': '2024-06-10',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        apkLogger.success('GEMINI', 'Cartesia Sonic API key verified successfully (HTTP 200 OK)');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('gemini_api_key_error', { detail: null }));
+        }
+        return { ok: true, message: '✅ Success! Cartesia Sonic Studio Voice AI connection verified and active.' };
+      }
+
+      const errJson = await res.json().catch(() => ({}));
+      const msg = errJson?.error?.message || `HTTP ${res.status}`;
+      apkLogger.error('GEMINI', `Cartesia key test failed (${res.status}): ${msg}`);
+      return { ok: false, message: `❌ Cartesia validation failed (${res.status}): ${msg}` };
+    } catch (e: any) {
+      return { ok: false, message: `❌ Network connection failed to Cartesia: ${e?.message || e}` };
+    }
+  }
+
+  // 2. Groq API validation ping
   if (cleanKey.startsWith('gsk_')) {
     try {
       const controller = new AbortController();

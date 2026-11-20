@@ -1,5 +1,5 @@
 import { normalizeQSRSpokenUtterance } from '../core/acousticNormalizer';
-import { getBackendBaseUrl, getVoiceApiKey } from '../config';
+import { getBackendBaseUrl, getVoiceApiKey, getCartesiaApiKey } from '../config';
 import { apkLogger } from '../utils/apkLogger';
 import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition as CapSpeechRecognition } from '@capacitor-community/speech-recognition';
@@ -1201,9 +1201,132 @@ export class AudioManager {
     const persona = FEMALE_PERSONAS.find(p => p.id === this.activePersonaId) || FEMALE_PERSONAS[0];
     const targetPitch = persona.defaultPitch * this.userPitchMultiplier;
     const targetRate = persona.defaultRate * this.userRateMultiplier;
-
-    // Attempt 1: Android Native TextToSpeech via AndroidAudioBridge (Direct Hardware Loudspeaker & Zero Latency)
     const audioBridge = (window as any).AndroidAudioBridge;
+
+    // Attempt 1: Cartesia Sonic Voice AI (Studio-Grade Indian Female Voice, Sub-200ms Latency)
+    const cartesiaKey = getCartesiaApiKey();
+    if (!skipNative && cartesiaKey && cartesiaKey.startsWith('sk_car_')) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 9000);
+        const startTime = Date.now();
+
+        // High-clarity Indian female voices:
+        // 'ffa0d297-8cf9-4ec9-8e4e-99a59e939b02' (Ananya - Natural Hindi/Indian English)
+        // 'e6b71342-48f1-4c70-a13a-d197b176ff24' (Sana - Friendly Indian Concierge)
+        const voiceId = isHindiOrHinglish
+          ? 'ffa0d297-8cf9-4ec9-8e4e-99a59e939b02'
+          : 'e6b71342-48f1-4c70-a13a-d197b176ff24';
+
+        const res = await fetch('https://api.cartesia.ai/tts/bytes', {
+          method: 'POST',
+          headers: {
+            'X-API-Key': cartesiaKey,
+            'Cartesia-Version': '2024-06-10',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model_id: 'sonic-latest',
+            transcript: cleanSpeechText,
+            voice: {
+              mode: 'id',
+              id: voiceId,
+            },
+            output_format: {
+              container: 'wav',
+              encoding: 'pcm_s16le',
+              sample_rate: 24000,
+            },
+            language: isHindiOrHinglish ? 'hi' : 'en',
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const wavBlob = await res.blob();
+
+          // Native Android Hardware MediaPlayer (Guaranteed Loudspeaker on Rockchip RK3568 POS tablet)
+          if (audioBridge && typeof audioBridge.playWavAudio === 'function') {
+            try {
+              const reader = new FileReader();
+              const base64Promise = new Promise<string>((resolve, reject) => {
+                reader.onloadend = () => {
+                  const dataUrl = reader.result as string;
+                  const base64 = dataUrl.split(',')[1] || '';
+                  resolve(base64);
+                };
+                reader.onerror = reject;
+              });
+              reader.readAsDataURL(wavBlob);
+              const base64Wav = await base64Promise;
+
+              if (base64Wav) {
+                const played = audioBridge.playWavAudio(base64Wav);
+                if (played) {
+                  apkLogger.success('MIC', `Cartesia Sonic Voice spoken via Native MediaPlayer (${Date.now() - startTime}ms)`);
+                  const onEnded = () => {
+                    window.removeEventListener('native_speech_ended', onEnded);
+                    finishSpeech();
+                  };
+                  window.addEventListener('native_speech_ended', onEnded);
+
+                  const wordCount = cleanSpeechText.split(/\s+/).length;
+                  const estimatedDurationMs = Math.max(3000, (wordCount / 2.0) * 1000 + 2500);
+                  this.speechWatchdogTimer = setTimeout(() => {
+                    window.removeEventListener('native_speech_ended', onEnded);
+                    finishSpeech();
+                  }, estimatedDurationMs);
+                  return;
+                }
+              }
+            } catch (nativePlayErr: any) {
+              apkLogger.warn('MIC', `Native MediaPlayer failed (${nativePlayErr?.message || nativePlayErr}); using HTML5 Audio fallback`);
+            }
+          }
+
+          // HTML5 Web Audio Fallback (desktop / browser)
+          const blobUrl = URL.createObjectURL(wavBlob);
+          const audio = new Audio(blobUrl);
+          audio.volume = 0.95;
+          this.currentAudioElement = audio;
+
+          try {
+            (window as any).AndroidAudioBridge?.forceSpeaker?.();
+          } catch {}
+
+          apkLogger.success('MIC', `Loudspeaker playback via Cartesia Sonic WAV (${Date.now() - startTime}ms)`);
+
+          const cleanupUrl = () => {
+            try {
+              URL.revokeObjectURL(blobUrl);
+            } catch {}
+          };
+
+          audio.onended = () => {
+            cleanupUrl();
+            if (!this.isSpeaking) return;
+            finishSpeech();
+          };
+
+          audio.onerror = () => {
+            cleanupUrl();
+            if (!this.isSpeaking) return;
+            apkLogger.warn('MIC', 'Cartesia audio error; falling back to next engine');
+            this.speak(text, onEnd, false);
+          };
+
+          await audio.play();
+          return;
+        } else {
+          apkLogger.warn('MIC', `Cartesia Sonic HTTP ${res.status}; falling back to next engine`);
+        }
+      } catch (e: any) {
+        apkLogger.warn('MIC', `Cartesia Sonic skipped (${e?.message || e}); falling back to next engine`);
+      }
+    }
+
+    // Attempt 2: Android Native TextToSpeech via AndroidAudioBridge (Direct Hardware Loudspeaker & Zero Latency)
     if (!skipNative && audioBridge && typeof audioBridge.speakIndian === 'function') {
       try {
         const spoken = audioBridge.speakIndian(cleanSpeechText, targetLang, targetPitch, targetRate);
