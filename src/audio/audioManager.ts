@@ -537,7 +537,7 @@ export class AudioManager {
   }
 
   private async runNativeRecognitionLoop() {
-    if (!this.isListening || this.isSpeaking || this.isNativeRunning) return;
+    if (!this.isListening || this.isSpeaking || this.isNativeRunning || this.geminiRecognizer) return;
     this.isNativeRunning = true;
     let consecutiveErrors = 0;
 
@@ -599,7 +599,7 @@ export class AudioManager {
    * Keeps speech recognition continuously looping on both Android native and Web.
    */
   public scheduleRecognitionRestart(reason: string, delayMs = 150) {
-    if (!this.isListening) return;
+    if (!this.isListening || this.geminiRecognizer) return;
 
     if (this.recognitionRestartTimer) {
       clearTimeout(this.recognitionRestartTimer);
@@ -1044,9 +1044,6 @@ export class AudioManager {
     if (this.onStateChangeCallback && this.isListening) {
       this.onStateChangeCallback('LISTENING');
     }
-    if (this.isAndroidMobile && this.isListening) {
-      this.scheduleRecognitionRestart('barge_in_resume', 180);
-    }
   }
 
   /**
@@ -1205,14 +1202,16 @@ export class AudioManager {
 
     // Immediately notify recognizer that speech output is starting
     this.geminiRecognizer?.pauseForSpeaking();
-    if (Capacitor.isNativePlatform()) {
-      try {
-        CapSpeechRecognition.stop().catch(() => {});
-      } catch {}
-    } else if (this.isAndroidMobile && this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch {}
+    if (!this.geminiRecognizer) {
+      if (Capacitor.isNativePlatform()) {
+        try {
+          CapSpeechRecognition.stop().catch(() => {});
+        } catch {}
+      } else if (this.isAndroidMobile && this.recognition) {
+        try {
+          this.recognition.stop();
+        } catch {}
+      }
     }
 
     if (this.onStateChangeCallback) {
