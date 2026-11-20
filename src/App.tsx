@@ -99,6 +99,10 @@ export default function App() {
 
   // Inactivity countdown timer
   useEffect(() => {
+    // Pause the watchdog while the payment screen is open: QR scanning can take
+    // up to 180s with no kiosk touch, and a mid-payment reset would lose the order.
+    if (showPaymentModal) return;
+
     inactivityTimerRef.current = setInterval(() => {
       setInactivitySeconds(prev => {
         if (prev <= 1) {
@@ -119,7 +123,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(inactivityTimerRef.current);
-  }, [inactivityLimit]);
+  }, [inactivityLimit, showPaymentModal]);
 
   // Track real-time audio volume
   useEffect(() => {
@@ -211,7 +215,12 @@ export default function App() {
 
         if (tc.name === 'call_staff') {
           setStaffSummonsReason(tc.args.reason || 'Customer allergen inquiry');
-        } else if (tc.name === 'request_payment' || tc.name === 'confirm_order') {
+        } else if (
+          (tc.name === 'request_payment' && result?.status === 'PAYMENT_INITIATED') ||
+          (tc.name === 'confirm_order' && result?.status === 'CONFIRMED')
+        ) {
+          // Only open the payment screen when the tool actually succeeded —
+          // an empty-cart confirm/payment error must never show the modal.
           setShowPaymentModal(true);
         } else if (tc.name === 'filter_menu') {
           // Explicitly clear old search query so it never conflicts with new dietary filter
@@ -300,6 +309,28 @@ export default function App() {
               setActiveFilterNotice(`Search: "${qToSearch}"`);
             }
           }
+        }
+      }
+
+      // 3a. Keep the spoken reply truthful: when a tool rejected the action,
+      // say what actually happened instead of the parser's optimistic reply
+      // (e.g. "added 50x" while the cart was unchanged).
+      const failedResult = toolCalls
+        .map((tc: any) => tc.result)
+        .find((r: any) => r && (r.status === 'ERROR' || r.status === 'OUT_OF_STOCK'));
+      if (failedResult) {
+        if (failedResult.status === 'OUT_OF_STOCK') {
+          const alts =
+            Array.isArray(failedResult.suggested_alternatives) && failedResult.suggested_alternatives.length > 0
+              ? ` Would you like ${failedResult.suggested_alternatives.slice(0, 2).join(' or ')} instead?`
+              : '';
+          finalReply = `${failedResult.message || 'That item is currently out of stock.'}${alts}`;
+        } else if (/quantity must be between/i.test(failedResult.error_message || '')) {
+          finalReply = 'Sorry, we can add a maximum of 20 at a time. Would you like me to add 20 instead?';
+        } else if (/cart is empty/i.test(failedResult.error_message || '')) {
+          finalReply = 'Your tray is empty — please add something tasty before checking out!';
+        } else {
+          finalReply = failedResult.error_message || finalReply;
         }
       }
 
@@ -476,21 +507,26 @@ export default function App() {
       kitchenOrderNumber: tokenNumber,
     });
 
-    // Submit order to kitchen display system endpoint
+    // Submit order to kitchen display system endpoint (only when a backend is
+    // configured — a bare fetch to `${''}/...` would 404 against the origin).
     try {
       const baseUrl = getBackendBaseUrl();
-      await fetch(`${baseUrl}/api/v1/orders/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          idempotencyKey: `idemp_${orderState.orderId}`,
-          orderId: orderState.orderId,
-          orderType: orderState.orderType,
-          items: orderState.items,
-          totalMinorUnits: orderState.totalAmountPaise,
-          paymentMethod,
-        }),
-      });
+      if (baseUrl && baseUrl.startsWith('http')) {
+        await fetch(`${baseUrl}/api/v1/orders/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            idempotencyKey: `idemp_${orderState.orderId}`,
+            orderId: orderState.orderId,
+            orderType: orderState.orderType,
+            items: orderState.items,
+            totalMinorUnits: orderState.totalAmountPaise,
+            paymentMethod,
+          }),
+        });
+      } else {
+        apkLogger.info('SYSTEM', 'Standalone kiosk mode: no backend configured, order kept locally.');
+      }
     } catch (err: any) {
       apkLogger.warn('SYSTEM', `Order submit to kitchen failed: ${err?.message || err}`);
     }

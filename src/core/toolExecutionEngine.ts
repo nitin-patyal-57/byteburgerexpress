@@ -229,6 +229,11 @@ export class ToolExecutionEngine {
         }
 
         case 'request_payment': {
+          const beforePay = this.orderStore.getState();
+          if (beforePay.items.length === 0) {
+            // Never open a payment flow on an empty cart
+            return { status: 'ERROR', error_message: 'Cart is empty; cannot initiate payment.' };
+          }
           const method = String(args.payment_method || 'UPI_QR').toUpperCase();
           this.orderStore.dispatch({ type: 'SET_PAYMENT_PENDING', method });
           const state = this.orderStore.getState();

@@ -30,6 +30,123 @@ export function getLevenshteinDistance(a: string, b: string): number {
   return matrix[bn][an];
 }
 
+/**
+ * Word-level Devanagari -> Latin transliteration used on the NLU INPUT path
+ * (the audioManager transliterator is only applied to TTS output, so Hindi
+ * utterances previously reached the parser as raw Devanagari and all Hindi
+ * quantity words like "दो" (do = 2) were ignored).
+ */
+const DEVANAGARI_WORD_MAP: Record<string, string> = {
+  // Greetings & particles
+  'नमस्ते': 'namaste', 'नमस्कार': 'namaskar', 'कृपया': 'kripya', 'धन्यवाद': 'dhanyavaad',
+  // Numbers (critical: "दो" = two, but is also a common verb ending)
+  'एक': 'ek', 'दो': 'do', 'तीन': 'teen', 'चार': 'char', 'चारा': 'char',
+  'पाँच': 'paanch', 'पांच': 'paanch', 'छह': 'chhe', 'सात': 'saat', 'आठ': 'aath',
+  'नौ': 'nau', 'दस': 'das', 'शून्य': 'zero',
+  // Menu items & ingredients
+  'देसी': 'desi', 'मसाला': 'masala', 'आलू': 'aloo', 'टिक्की': 'tikki', 'बर्गर': 'burger',
+  'बर्गर्स': 'burgers', 'पनीर': 'paneer', 'चिकन': 'chicken', 'मटन': 'mutton', 'मछली': 'machli',
+  'प्याज': 'pyaz', 'फ्राइज़': 'fries', 'फ्राइज': 'fries', 'फ्रेंच': 'french',
+  'शेक': 'shake', 'कोल्ड': 'cold', 'ड्रिंक': 'drink', 'कोक': 'coke', 'कोला': 'cola',
+  'ठंडा': 'thanda', 'ठण्डा': 'thanda', 'ब्राउनी': 'brownie', 'चॉकलेट': 'chocolate',
+  'आम': 'mango', 'चाय': 'chai', 'पानी': 'paani', 'सोडा': 'soda', 'आइस': 'ice',
+  'क्रीम': 'cream', 'ओरियो': 'oreo', 'सॉफ्ट': 'soft', 'सर्व': 'serve', 'स्वीर्ल': 'swirl',
+  'समोसा': 'samosa', 'पिज़्ज़ा': 'pizza', 'बिरयानी': 'biryani', 'मोमोस': 'momos',
+  // Commands & conversational Hindi
+  'और': 'aur', 'दे': 'de', 'दोगे': 'doge', 'दीजिए': 'dijiye', 'मुझे': 'mujhe', 'चाहिए': 'chahiye',
+  'दिखाओ': 'dikhao', 'बनाओ': 'banao', 'करो': 'karo', 'कर': 'kar', 'करदो': 'kardo', 'कर दो': 'kar do',
+  'हटाओ': 'hatao', 'निकालो': 'nikalo', 'निकाल': 'nikal', 'क्या': 'kya',
+  'है': 'hai', 'हैं': 'hain', 'मेनू': 'menu', 'ऑर्डर': 'order', 'कैंसिल': 'cancel', 'बिल': 'bill',
+  'टोटल': 'total', 'पेमेंट': 'payment', 'कार्ड': 'card', 'नकद': 'cash', 'यूपीआई': 'upi',
+  'वेज': 'veg', 'नहीं': 'nahi', 'हाँ': 'haan', 'हां': 'haan', 'ठीक': 'theek', 'बस': 'bas',
+  'थम्स': 'thums', 'अप': 'up', 'नगेट्स': 'nuggets', 'विंग्स': 'wings', 'रिंग्स': 'rings',
+};
+
+const DEVANAGARI_DIGITS: Record<string, string> = {
+  '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
+  '५': '5', '६': '6', '७': '7', '८': '8', '९': '9',
+};
+
+const DEVANAGARI_CONSONANTS: Record<string, string> = {
+  'क': 'ka', 'ख': 'kha', 'ग': 'ga', 'घ': 'gha', 'ङ': 'nga',
+  'च': 'cha', 'छ': 'chha', 'ज': 'ja', 'झ': 'jha', 'ञ': 'nya',
+  'ट': 'ta', 'ठ': 'tha', 'ड': 'da', 'ढ': 'dha', 'ण': 'na',
+  'त': 'ta', 'थ': 'tha', 'द': 'da', 'ध': 'dha', 'न': 'na',
+  'प': 'pa', 'फ': 'pha', 'ब': 'ba', 'भ': 'bha', 'म': 'ma',
+  'य': 'ya', 'र': 'ra', 'ल': 'la', 'व': 'va', 'श': 'sha', 'ष': 'sha', 'स': 'sa', 'ह': 'ha',
+  'ळ': 'la', 'क़': 'qa', 'ख़': 'kha', 'ग़': 'gha', 'ज़': 'za', 'फ़': 'fa',
+};
+
+const DEVANAGARI_VOWEL_SIGNS: Record<string, string> = {
+  'ा': 'a', 'ि': 'i', 'ी': 'i', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
+  'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au',
+};
+
+const DEVANAGARI_INDEPENDENT_VOWELS: Record<string, string> = {
+  'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
+  'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'ऑ': 'o', 'ॲ': 'a', 'ऍ': 'e',
+};
+
+function transliterateDevanagariRun(run: string): string {
+  const exact = DEVANAGARI_WORD_MAP[run];
+  if (exact) return exact;
+
+  let out = '';
+  const chars = Array.from(run);
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch === '्') {
+      // Virama: kill the inherent vowel of the previous consonant
+      out = out.replace(/a$/, '');
+      continue;
+    }
+    if (ch === 'ं' || ch === 'ँ') {
+      out += 'n';
+      continue;
+    }
+    if (ch === '़' || ch === 'ऽ') continue;
+    const sign = DEVANAGARI_VOWEL_SIGNS[ch];
+    if (sign !== undefined) {
+      // Vowel sign replaces the inherent vowel of the previous consonant
+      if (out.endsWith('a') && !out.endsWith('aa')) out = out.slice(0, -1);
+      out += sign;
+      continue;
+    }
+    const cons = DEVANAGARI_CONSONANTS[ch];
+    if (cons) {
+      out += cons;
+      continue;
+    }
+    const vow = DEVANAGARI_INDEPENDENT_VOWELS[ch];
+    if (vow) {
+      out += vow;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Transliterates any Devanagari (Hindi) portion of an utterance to Latin script
+ * so the deterministic NLU can match Hindi speech against the English catalog.
+ * Pure-Latin input is returned unchanged.
+ */
+export function transliterateDevanagariForNLU(input: string): string {
+  if (!input || !/[\u0900-\u097F]/.test(input)) return input;
+
+  const withDigits = input.replace(/[\u0966-\u096F]/g, d => DEVANAGARI_DIGITS[d] ?? d);
+
+  return withDigits
+    .split(/\s+/)
+    .map(token => {
+      if (!/[\u0900-\u097F]/.test(token)) return token;
+      // Preserve any leading/trailing punctuation around the Devanagari run
+      return token.replace(/[\u0900-\u097F]+/g, run => transliterateDevanagariRun(run));
+    })
+    .join(' ');
+}
+
 export function normalizeQSRSpokenUtterance(rawInput: string): string {
   if (!rawInput || typeof rawInput !== 'string') return '';
 

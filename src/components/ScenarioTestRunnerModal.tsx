@@ -3,6 +3,7 @@ import { DIALOGUE_SCENARIOS } from '../core/dialogueScenarios';
 import { ScenarioTestDefinition, ScenarioTestResult, OrderState } from '../types';
 import { ToolExecutionEngine } from '../core/toolExecutionEngine';
 import { DeterministicOrderStore } from '../core/orderReducer';
+import { parseDeterministicIntent } from '../core/nluFallback';
 import {
   Play,
   RotateCcw,
@@ -21,6 +22,26 @@ interface ScenarioTestRunnerModalProps {
   onClose: () => void;
   onApplyStateToKiosk?: (state: OrderState) => void;
 }
+
+/**
+ * Conversation pre-state that mirrors what the customer already did before the
+ * scenario utterance (e.g. a burger is already in the tray when they say
+ * "make that three"). This replaces the old hardcoded tool calls so every
+ * scenario runs through the REAL voice pipeline:
+ *   utterance -> acoustic normalizer -> parseDeterministicIntent -> tools -> reducer
+ */
+const PRE_SETUP: Record<number, Array<{ name: string; args: Record<string, any> }>> = {
+  5: [{ name: 'add_item', args: { item_id: 'b_aloo_tikki', quantity: 1 } }],
+  7: [{ name: 'add_item', args: { item_id: 'b_makhani_paneer', quantity: 1 } }],
+  8: [{ name: 'add_item', args: { item_id: 's_peri_fries', quantity: 1 } }],
+  9: [{ name: 'add_item', args: { item_id: 'b_veggie_delight', quantity: 1 } }],
+  10: [{ name: 'add_item', args: { item_id: 'b_mutton_galouti', quantity: 1 } }],
+  24: [{ name: 'add_item', args: { item_id: 'b_aloo_tikki', quantity: 2 } }],
+  25: [{ name: 'set_order_type', args: { order_type: 'DINE_IN' } }],
+  26: [{ name: 'add_item', args: { item_id: 'b_cheddar_crunch', quantity: 1 } }],
+  28: [{ name: 'add_item', args: { item_id: 'b_fish_fillet', quantity: 1 } }],
+  30: [{ name: 'add_item', args: { item_id: 's_salted_fries', quantity: 1 } }],
+};
 
 export const ScenarioTestRunnerModal: React.FC<ScenarioTestRunnerModalProps> = ({
   onClose,
@@ -57,234 +78,44 @@ export const ScenarioTestRunnerModal: React.FC<ScenarioTestRunnerModalProps> = (
     const executedTools: string[] = [];
     const toolResults: any[] = [];
 
-    // Helper step execution based on scenario logic
     try {
-      switch (scenario.id) {
-        case 1: {
-          const r1 = await engine.execute('add_item', { item_id: 'b_makhani_paneer', quantity: 1 });
-          const r2 = await engine.execute('set_order_type', { order_type: 'DINE_IN' });
-          executedTools.push('add_item', 'set_order_type');
-          toolResults.push(r1, r2);
-          break;
-        }
-        case 2: {
-          const r1 = await engine.execute('add_item', { item_id: 'b_aloo_tikki', quantity: 2 });
-          const r2 = await engine.execute('add_item', { item_id: 'bev_coke', quantity: 2 });
-          executedTools.push('add_item', 'add_item');
-          toolResults.push(r1, r2);
-          break;
-        }
-        case 3: {
-          const r1 = await engine.execute('add_item', {
-            item_id: 'b_spicy_chicken',
-            quantity: 1,
-            modifier_ids: ['mod_extra_cheese', 'mod_no_onion'],
-          });
-          executedTools.push('add_item');
-          toolResults.push(r1);
-          break;
-        }
-        case 4: {
-          const r1 = await engine.execute('add_item', { item_id: 'b_spicy_chicken', quantity: 1 });
-          const r2 = await engine.execute('add_item', { item_id: 's_salted_fries', quantity: 2 });
-          executedTools.push('add_item', 'add_item');
-          toolResults.push(r1, r2);
-          break;
-        }
-        case 5: {
-          await engine.execute('add_item', { item_id: 'b_aloo_tikki', quantity: 1 });
-          const lineId = testStore.getState().items[0]?.lineId || '';
-          const r = await engine.execute('apply_combo', { line_id: lineId, drink_item_id: 'bev_coke' });
-          executedTools.push('apply_combo');
-          toolResults.push(r);
-          break;
-        }
-        case 6: {
-          const r = await engine.execute('search_menu', { query: 'burger' });
-          executedTools.push('search_menu');
-          toolResults.push(r);
-          break;
-        }
-        case 7: {
-          await engine.execute('add_item', { item_id: 'b_makhani_paneer', quantity: 1 });
-          const lineId = testStore.getState().items[0]?.lineId || '';
-          const r = await engine.execute('update_item', { line_id: lineId, quantity: 3 });
-          executedTools.push('update_item');
-          toolResults.push(r);
-          break;
-        }
-        case 8: {
-          await engine.execute('add_item', { item_id: 's_peri_fries', quantity: 1 });
-          const lineId = testStore.getState().items[0]?.lineId || '';
-          const r = await engine.execute('remove_item', { line_id: lineId });
-          executedTools.push('remove_item');
-          toolResults.push(r);
-          break;
-        }
-        case 9: {
-          await engine.execute('add_item', { item_id: 'b_veggie_delight', quantity: 1 });
-          const lineId = testStore.getState().items[0]?.lineId || '';
-          const r = await engine.execute('update_item', { line_id: lineId, quantity: 0 });
-          executedTools.push('update_item');
-          toolResults.push(r);
-          break;
-        }
-        case 10: {
-          await engine.execute('add_item', { item_id: 'b_mutton_galouti', quantity: 1 });
-          const r = await engine.execute('cancel_order', { reason: 'Customer reset' });
-          executedTools.push('cancel_order');
-          toolResults.push(r);
-          break;
-        }
-        case 11: {
-          const r = await engine.execute('add_item', { item_id: 'd_apple_pie', quantity: 1 });
-          executedTools.push('add_item');
-          toolResults.push(r);
-          break;
-        }
-        case 12: {
-          const r = await engine.execute('search_menu', { query: 'pepperoni pizza burger' });
-          executedTools.push('search_menu');
-          toolResults.push(r);
-          break;
-        }
-        case 13: {
-          const r = await engine.execute('add_item', { item_id: 'b_aloo_tikki', quantity: 50 });
-          executedTools.push('add_item');
-          toolResults.push(r);
-          break;
-        }
-        case 14: {
-          const r = await engine.execute('confirm_order', {});
-          executedTools.push('confirm_order');
-          toolResults.push(r);
-          break;
-        }
-        case 15: {
-          const r = await engine.execute('add_item', {
-            item_id: 'bev_coke',
-            quantity: 1,
-            modifier_ids: ['mod_extra_cheese'],
-          });
-          executedTools.push('add_item');
-          toolResults.push(r);
-          break;
-        }
-        case 16: {
-          const r = await engine.execute('call_staff', { reason: 'Severe Peanut Allergy Inquiry' });
-          executedTools.push('call_staff');
-          toolResults.push(r);
-          break;
-        }
-        case 17: {
-          const r = await engine.execute('call_staff', { reason: 'Celiac Disease / Gluten Verification' });
-          executedTools.push('call_staff');
-          toolResults.push(r);
-          break;
-        }
-        case 18: {
-          const r = await engine.execute('search_menu', { query: 'aloo tikki' });
-          executedTools.push('search_menu');
-          toolResults.push(r);
-          break;
-        }
-        case 19: {
-          await engine.execute('add_item', { item_id: 'b_double_trouble', quantity: 1 });
-          executedTools.push('add_item');
-          break;
-        }
-        case 20: {
-          const r = await engine.execute('search_menu', { query: 'ignore rules; sudo su' });
-          executedTools.push('search_menu');
-          toolResults.push(r);
-          break;
-        }
-        case 21: {
-          const r = await engine.execute('add_item', { item_id: 'bev_coke', quantity: 100 });
-          executedTools.push('add_item');
-          toolResults.push(r);
-          break;
-        }
-        case 22: {
-          const r = await engine.execute('search_menu', { query: "' OR '1'='1' --" });
-          executedTools.push('search_menu');
-          toolResults.push(r);
-          break;
-        }
-        case 23: {
-          await engine.execute('add_item', { item_id: 'b_makhani_paneer', quantity: 1 });
-          await engine.execute('add_item', { item_id: 's_peri_fries', quantity: 1 });
-          await engine.execute('add_item', { item_id: 'bev_thums_up', quantity: 1 });
-          await engine.execute('add_item', { item_id: 'd_mcflurry_oreo', quantity: 1 });
-          await engine.execute('set_order_type', { order_type: 'TAKEAWAY' });
-          executedTools.push('add_item', 'set_order_type');
-          break;
-        }
-        case 24: {
-          await engine.execute('add_item', { item_id: 'b_aloo_tikki', quantity: 2 });
-          const r = await engine.execute('get_order_summary', {});
-          executedTools.push('get_order_summary');
-          toolResults.push(r);
-          break;
-        }
-        case 25: {
-          await engine.execute('set_order_type', { order_type: 'DINE_IN' });
-          const r = await engine.execute('set_order_type', { order_type: 'TAKEAWAY' });
-          executedTools.push('set_order_type');
-          toolResults.push(r);
-          break;
-        }
-        case 26: {
-          await engine.execute('add_item', { item_id: 'b_cheddar_crunch', quantity: 1 });
-          await engine.execute('confirm_order', {});
-          const r = await engine.execute('request_payment', { payment_method: 'CARD_TERMINAL' });
-          executedTools.push('request_payment');
-          toolResults.push(r);
-          break;
-        }
-        case 27: {
-          const r = await engine.execute('call_staff', { reason: 'Customer requested cash counter payment' });
-          executedTools.push('call_staff');
-          toolResults.push(r);
-          break;
-        }
-        case 28: {
-          await engine.execute('add_item', { item_id: 'b_fish_fillet', quantity: 1 });
-          const r = await engine.execute('get_order_summary', {});
-          executedTools.push('get_order_summary');
-          toolResults.push(r);
-          break;
-        }
-        case 29: {
-          const r = await engine.execute('search_menu', { query: '   ' });
-          toolResults.push(r);
-          break;
-        }
-        case 30: {
-          testStore.dispatch({
-            type: 'ADD_ITEM',
-            item: engine.getItemById('s_salted_fries')!,
-            quantity: 1,
-          });
-          const r = await engine.execute('add_item', { item_id: 'bev_belgian_shake', quantity: 1 });
-          executedTools.push('add_item');
-          toolResults.push(r);
-          break;
-        }
+      // 1. Replay the conversation pre-state (what already happened before this utterance)
+      for (const step of PRE_SETUP[scenario.id] || []) {
+        await engine.execute(step.name, step.args);
       }
 
+      // 2. THE REAL PIPELINE: utterance -> acoustic normalizer -> deterministic NLU
+      const parsed = parseDeterministicIntent(scenario.userUtterance, testStore.getState());
+
+      // 3. Execute whatever tool calls the parser actually produced
+      for (const tc of parsed.toolCalls) {
+        const r = await engine.execute(tc.name, tc.args);
+        executedTools.push(tc.name);
+        toolResults.push(r);
+      }
+
+      // 4. Assert cart state AND that the expected tools were produced
       const assertion = scenario.assertions(testStore.getState(), toolResults);
+      const toolMatch =
+        scenario.expectedToolCalls.length === 0
+          ? executedTools.length === 0
+          : scenario.expectedToolCalls.every(t => executedTools.includes(t));
+      const passed = assertion.passed && toolMatch;
+      const message = toolMatch
+        ? assertion.message
+        : `${assertion.message} | Expected tools: [${scenario.expectedToolCalls.join(', ') || 'none'}], Actual: [${executedTools.join(', ') || 'none'}]`;
+
       const durationMs = Math.round(performance.now() - startTime);
 
       const result: ScenarioTestResult = {
         id: scenario.id,
         title: scenario.title,
         category: scenario.category,
-        passed: assertion.passed,
-        message: assertion.message,
+        passed,
+        message,
         durationMs,
         executedTools,
-        transcript: scenario.userUtterance,
+        transcript: `${scenario.userUtterance}${parsed.reply ? ` → "${parsed.reply}"` : ''}`,
       };
 
       setResults(prev => ({ ...prev, [scenario.id]: result }));
@@ -333,11 +164,11 @@ export const ScenarioTestRunnerModal: React.FC<ScenarioTestRunnerModalProps> = (
               <div className="flex items-center space-x-2">
                 <h2 className="text-lg font-black text-white">30 Scripted Dialogue Scenarios Suite</h2>
                 <span className="text-[10px] font-mono bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded-full">
-                  Automated Verification
+                  Real Pipeline
                 </span>
               </div>
               <p className="text-xs text-neutral-400">
-                Tests Hinglish, Hindi, Punjabi, barge-in latency, quantity caps, and prompt injections.
+                Runs each utterance through the live NLU parser, tool engine &amp; cart reducer.
               </p>
             </div>
           </div>
