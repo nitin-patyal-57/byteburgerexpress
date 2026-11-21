@@ -664,6 +664,16 @@ export class AudioManager {
     try {
       this.isListening = true;
       this.recognitionState = 'ACTIVE';
+
+      // Defensive: release any previous live mic session / AudioContext before
+      // creating a fresh recognizer so repeated mic cycles never leak contexts.
+      if (this.geminiRecognizer) {
+        try {
+          this.geminiRecognizer.stop();
+        } catch { }
+        this.geminiRecognizer = null;
+      }
+
       if (!this.geminiRecognizer) {
         this.geminiRecognizer = new GeminiCloudAudioRecognizer(
           (text: string) => {
@@ -701,15 +711,6 @@ export class AudioManager {
             }
           }
         );
-      } else {
-        this.geminiRecognizer.setOnBargeIn(() => {
-          this.flushImmediate();
-          this.logRCA('BARGE_IN', 'Customer barge-in detected; immediately halted assistant speech in <40ms');
-          apkLogger.info('MIC', '⚡ Customer interrupted kiosk! Assistant stopped speaking, listening to customer command...');
-          if (this.onBargeInCallback) {
-            this.onBargeInCallback();
-          }
-        });
       }
 
       const success = await this.geminiRecognizer.start();
@@ -879,6 +880,17 @@ export class AudioManager {
 
     this.geminiRecognizer?.stop();
     this.geminiRecognizer = null;
+
+    // Release any shared AudioContext so repeated cycles don't accumulate live contexts
+    if (this.audioCtx) {
+      if (this.audioCtx.state !== 'closed') {
+        try {
+          void this.audioCtx.close();
+        } catch { }
+      }
+      this.audioCtx = null;
+      this.analyser = null;
+    }
 
     if (this.watchdogInterval) {
       clearInterval(this.watchdogInterval);

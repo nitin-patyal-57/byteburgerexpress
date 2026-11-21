@@ -1,13 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Mic, MicOff, Sparkles } from 'lucide-react';
 import { VoiceState } from '../types';
+import { globalAudioManager } from '../audio/audioManager';
 
 interface VoiceQuickPromptsProps {
   onSendUtterance: (text: string) => void;
   voiceState: VoiceState;
   isMicActive: boolean;
   onToggleMic: () => void;
-  volume: number;
 }
 
 export const VoiceQuickPrompts: React.FC<VoiceQuickPromptsProps> = ({
@@ -15,8 +15,22 @@ export const VoiceQuickPrompts: React.FC<VoiceQuickPromptsProps> = ({
   voiceState,
   isMicActive,
   onToggleMic,
-  volume,
 }) => {
+  // Poll the mic visualizer locally: keeping this state in App re-rendered the
+  // entire kiosk tree (30 menu cards, cart, captions) 12.5x/second whenever
+  // the microphone was live.
+  const [volume, setVolume] = useState<number>(0);
+  useEffect(() => {
+    if (!isMicActive) {
+      setVolume(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      const data = globalAudioManager.getVisualizerData();
+      setVolume(data.volume);
+    }, 80);
+    return () => clearInterval(interval);
+  }, [isMicActive]);
   const quickPrompts = [
     { label: '🍔 Double Cheese Burger', text: 'Add one double cheese burger' },
     { label: '🍟 Peri Peri Fries', text: 'Add one peri peri fries' },

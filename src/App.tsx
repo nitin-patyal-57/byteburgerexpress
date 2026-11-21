@@ -42,7 +42,6 @@ export default function App() {
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [interimTranscript, setInterimTranscript] = useState<string>('');
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
-  const [volume, setVolume] = useState<number>(0);
   const [inactivityLimit, setInactivityLimit] = useState<number>(45);
   const [inactivitySeconds, setInactivitySeconds] = useState<number>(45);
   const [aecEnabled, setAecEnabled] = useState<boolean>(true);
@@ -124,16 +123,6 @@ export default function App() {
 
     return () => clearInterval(inactivityTimerRef.current);
   }, [inactivityLimit, showPaymentModal]);
-
-  // Track real-time audio volume
-  useEffect(() => {
-    if (!isMicActive) return;
-    const interval = setInterval(() => {
-      const data = globalAudioManager.getVisualizerData();
-      setVolume(data.volume);
-    }, 80);
-    return () => clearInterval(interval);
-  }, [isMicActive]);
 
   // Core Voice Turn Execution Pipeline
   const processCustomerUtterance = async (customerText: string) => {
@@ -383,7 +372,7 @@ export default function App() {
   processCustomerUtteranceRef.current = processCustomerUtterance;
 
   // Start microphone helper
-  const startMic = async () => {
+  const startMic = useCallback(async () => {
     isMicActiveRef.current = true;
     setIsMicActive(true);
     await globalAudioManager.startMicrophone(
@@ -407,7 +396,7 @@ export default function App() {
     );
     setVoiceState('LISTENING');
     resetInactivityTimer();
-  };
+  }, [resetInactivityTimer]);
 
   // Toggle microphone
   const handleToggleMic = async () => {
@@ -438,7 +427,7 @@ export default function App() {
   };
 
   // Touch handlers: Add manually or ask by voice
-  const handleQuickAdd = (item: MenuItem, qty: number, modifiers?: ModifierOption[]) => {
+  const handleQuickAdd = useCallback((item: MenuItem, qty: number, modifiers?: ModifierOption[]) => {
     resetInactivityTimer();
     globalOrderStore.dispatch({
       type: 'ADD_ITEM',
@@ -456,7 +445,7 @@ export default function App() {
         globalAudioManager.resumeListening(100);
       }
     }, 1000);
-  };
+  }, [resetInactivityTimer, startMic]);
 
   const handleUpdateQuantity = (lineId: string, newQty: number) => {
     resetInactivityTimer();
@@ -535,7 +524,7 @@ export default function App() {
   /**
    * Complete payment cycle and automatically clear previous customer's cart for the next customer
    */
-  const handleOrderCompleteAndClear = () => {
+  const handleOrderCompleteAndClear = useCallback(() => {
     setShowPaymentModal(false);
     // 1. Reset order store completely to a blank tray
     globalOrderStore.dispatch({ type: 'RESET_ORDER' });
@@ -558,7 +547,15 @@ export default function App() {
         globalAudioManager.resumeListening(0);
       }
     });
-  };
+  }, [resetInactivityTimer]);
+
+  // Stable handler for memoized MenuGrid
+  const handleClearFilters = useCallback(() => {
+    setSelectedCategory('All');
+    setVegFilter('ALL');
+    setSearchQuery('');
+    setActiveFilterNotice(null);
+  }, []);
 
   /**
    * Direct Tap-to-Speak trigger (Push-to-Talk for loud dining halls with 5-second chunk & break)
@@ -638,12 +635,7 @@ export default function App() {
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             activeFilterNotice={activeFilterNotice}
-            onClearFilters={() => {
-              setSelectedCategory('All');
-              setVegFilter('ALL');
-              setSearchQuery('');
-              setActiveFilterNotice(null);
-            }}
+            onClearFilters={handleClearFilters}
             onQuickAdd={handleQuickAdd}
           />
         </section>
@@ -737,7 +729,6 @@ export default function App() {
         voiceState={voiceState}
         isMicActive={isMicActive}
         onToggleMic={handleToggleMic}
-        volume={volume}
       />
 
       {/* Payment Gateway Modal */}

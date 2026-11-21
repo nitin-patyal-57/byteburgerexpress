@@ -79,6 +79,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     return () => clearInterval(interval);
   }, [paidToken]);
 
+  // Keep the latest completion callback in a ref: the parent (App) re-renders
+  // frequently (inactivity countdown, live transcripts) and re-creates its
+  // handlers, so depending on `onOrderComplete` directly tore down this
+  // interval on every parent render and the auto-clear never reached zero.
+  const onOrderCompleteRef = useRef(onOrderComplete);
+  useEffect(() => {
+    onOrderCompleteRef.current = onOrderComplete;
+  }, [onOrderComplete]);
+
   // Automatic post-payment auto-clear timer (wipes previous order for next customer)
   useEffect(() => {
     if (!paidToken) return;
@@ -86,18 +95,29 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setAutoClearSeconds(prev => {
         if (prev <= 1) {
           clearInterval(timer);
-          onOrderComplete();
+          onOrderCompleteRef.current();
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [paidToken, onOrderComplete]);
+  }, [paidToken]);
+
+  // Never let a pending "simulate payment" timer dispatch MARK_PAID after
+  // the modal has already been closed/unmounted.
+  const simulateTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (simulateTimerRef.current) {
+        clearTimeout(simulateTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleSimulatePayment = (method: string) => {
     setIsProcessing(true);
-    setTimeout(() => {
+    simulateTimerRef.current = window.setTimeout(() => {
       setIsProcessing(false);
       const tokenNumber = Math.floor(Math.random() * 899) + 100;
       setPaidToken(tokenNumber);

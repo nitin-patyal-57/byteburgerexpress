@@ -1041,8 +1041,18 @@ export class GeminiCloudAudioRecognizer {
       clearInterval(this.tapToSpeakInterval);
       this.tapToSpeakInterval = null;
     }
+    // Abort any in-flight transcription so a stopped mic can't fire callbacks.
+    if (this.activeAbortController) {
+      try {
+        this.activeAbortController.abort();
+      } catch { }
+      this.activeAbortController = null;
+    }
 
     try {
+      if (this.processor) {
+        this.processor.onaudioprocess = null;
+      }
       this.processor?.disconnect();
       this.analyser?.disconnect();
       this.sourceNode?.disconnect();
@@ -1058,6 +1068,27 @@ export class GeminiCloudAudioRecognizer {
       this.lowpassFilter = null;
       this.peakingFilter = null;
     } catch { }
+
+    // Release the microphone hardware and the AudioContext. Without this,
+    // every mic on/off cycle leaked a live MediaStream + AudioContext, and
+    // the Android WebView caps both (~6 contexts) — voice ordering would
+    // hard-fail after a handful of cycles until the app was restarted.
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch { }
+      });
+      this.mediaStream = null;
+    }
+    if (this.audioCtx) {
+      if (this.audioCtx.state !== 'closed') {
+        try {
+          void this.audioCtx.close();
+        } catch { }
+      }
+      this.audioCtx = null;
+    }
 
     if (this.unsubscribeFilter) {
       this.unsubscribeFilter();

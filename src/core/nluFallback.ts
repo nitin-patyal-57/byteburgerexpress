@@ -349,8 +349,8 @@ export function parseDeterministicIntent(
     const reason = text.includes('peanut')
       ? 'Severe Peanut Allergy Inquiry'
       : text.includes('celiac') || text.includes('gluten')
-      ? 'Celiac Disease / Gluten Verification'
-      : 'Allergen inquiry';
+        ? 'Celiac Disease / Gluten Verification'
+        : 'Allergen inquiry';
 
     toolCalls.push({
       id: `call_${Date.now()}_staff`,
@@ -1031,8 +1031,8 @@ export function parseDeterministicIntent(
       );
     const inTray = negatedWord
       ? cartItems.find((it: any) =>
-          (it.menuItem.nameEn + ' ' + it.menuItem.synonyms.join(' ')).toLowerCase().includes(negatedWord)
-        )
+        (it.menuItem.nameEn + ' ' + it.menuItem.synonyms.join(' ')).toLowerCase().includes(negatedWord)
+      )
       : null;
     if (inTray) {
       return {
@@ -1180,54 +1180,54 @@ export function parseDeterministicIntent(
   // If direct "add ..." didn't match, run general multi-item parser
   if (matchedItems.length === 0) {
     for (const item of SEED_MENU_ITEMS) {
-    const enName = item.nameEn.toLowerCase();
-    const hiName = item.nameHi;
-    let matchedPhrase: string | null = null;
-    if (includesPhrase(matchText, enName)) {
-      matchedPhrase = enName;
-    } else if (hiName && includesPhrase(matchText, hiName)) {
-      matchedPhrase = hiName;
-    } else {
-      // Find longest matching synonym (word-boundary aware: "tea" must not
-      // match inside "instead")
-      let bestSyn: string | null = null;
-      for (const syn of item.synonyms) {
-        const s = syn.toLowerCase();
-        if (includesPhrase(matchText, s)) {
-          if (!bestSyn || s.length > bestSyn.length) {
-            bestSyn = s;
+      const enName = item.nameEn.toLowerCase();
+      const hiName = item.nameHi;
+      let matchedPhrase: string | null = null;
+      if (includesPhrase(matchText, enName)) {
+        matchedPhrase = enName;
+      } else if (hiName && includesPhrase(matchText, hiName)) {
+        matchedPhrase = hiName;
+      } else {
+        // Find longest matching synonym (word-boundary aware: "tea" must not
+        // match inside "instead")
+        let bestSyn: string | null = null;
+        for (const syn of item.synonyms) {
+          const s = syn.toLowerCase();
+          if (includesPhrase(matchText, s)) {
+            if (!bestSyn || s.length > bestSyn.length) {
+              bestSyn = s;
+            }
           }
         }
+        if (bestSyn) matchedPhrase = bestSyn;
       }
-      if (bestSyn) matchedPhrase = bestSyn;
-    }
 
-    if (matchedPhrase) {
-      // Don't duplicate if already matched
-      if (!matchedItems.some(m => m.item.id === item.id)) {
-        let itemQty = parsedQty;
-        const matchIdx = matchText.indexOf(matchedPhrase);
-        if (matchIdx > 0) {
-          // Inspect up to 24 characters immediately before the matched item phrase
-          const prefixWindow = matchText.slice(Math.max(0, matchIdx - 24), matchIdx).trim();
-          const lastTokens = prefixWindow.split(/\s+/).slice(-2).join(' ');
-          if (/\b(1|one|ek|a|an)\b/i.test(lastTokens)) {
-            itemQty = 1;
-          } else if (/\b(2|two|do)\b/i.test(lastTokens)) {
-            itemQty = 2;
-          } else if (/\b(3|three|teen)\b/i.test(lastTokens)) {
-            itemQty = 3;
-          } else if (/\b(4|four|char|chaar)\b/i.test(lastTokens)) {
-            itemQty = 4;
-          } else if (/\b(5|five|paanch)\b/i.test(lastTokens)) {
-            itemQty = 5;
+      if (matchedPhrase) {
+        // Don't duplicate if already matched
+        if (!matchedItems.some(m => m.item.id === item.id)) {
+          let itemQty = parsedQty;
+          const matchIdx = matchText.indexOf(matchedPhrase);
+          if (matchIdx > 0) {
+            // Inspect up to 24 characters immediately before the matched item phrase
+            const prefixWindow = matchText.slice(Math.max(0, matchIdx - 24), matchIdx).trim();
+            const lastTokens = prefixWindow.split(/\s+/).slice(-2).join(' ');
+            if (/\b(1|one|ek|a|an)\b/i.test(lastTokens)) {
+              itemQty = 1;
+            } else if (/\b(2|two|do)\b/i.test(lastTokens)) {
+              itemQty = 2;
+            } else if (/\b(3|three|teen)\b/i.test(lastTokens)) {
+              itemQty = 3;
+            } else if (/\b(4|four|char|chaar)\b/i.test(lastTokens)) {
+              itemQty = 4;
+            } else if (/\b(5|five|paanch)\b/i.test(lastTokens)) {
+              itemQty = 5;
+            }
           }
+          matchedItems.push({ item, qty: itemQty, matchedPhrase });
         }
-        matchedItems.push({ item, qty: itemQty, matchedPhrase });
       }
     }
   }
-}
 
   // Deduplicate overlapping substring matches:
   // e.g. If "peri fries" matched s_peri_fries, and "fries" matched s_salted_fries,
@@ -1239,8 +1239,8 @@ export function parseDeterministicIntent(
         return (
           other.matchedPhrase.length > current.matchedPhrase.length &&
           (other.matchedPhrase.includes(current.matchedPhrase) ||
-           (matchText.indexOf(other.matchedPhrase) <= matchText.indexOf(current.matchedPhrase) &&
-            matchText.indexOf(other.matchedPhrase) + other.matchedPhrase.length >= matchText.indexOf(current.matchedPhrase) + current.matchedPhrase.length))
+            (matchText.indexOf(other.matchedPhrase) <= matchText.indexOf(current.matchedPhrase) &&
+              matchText.indexOf(other.matchedPhrase) + other.matchedPhrase.length >= matchText.indexOf(current.matchedPhrase) + current.matchedPhrase.length))
         );
       });
       return !isSubMatchOfOther;

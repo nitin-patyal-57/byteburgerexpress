@@ -16,7 +16,7 @@ interface MenuGridProps {
   onClearFilters?: () => void;
 }
 
-export const MenuGrid: React.FC<MenuGridProps> = ({
+const MenuGridBase: React.FC<MenuGridProps> = ({
   items,
   onQuickAdd,
   selectedCategory: propCategory,
@@ -552,3 +552,7 @@ export const MenuGrid: React.FC<MenuGridProps> = ({
     </div>
   );
 };
+
+// Memoize MenuGrid so the heaviest subtree (30 image cards) skips re-rendering
+// while the voice pipeline streams transcripts into the root App component.
+export const MenuGrid = React.memo(MenuGridBase);
